@@ -26,7 +26,7 @@ from twisted.internet import reactor, protocol
 logging.basicConfig(format = '[%(levelname)s] %(asctime)s - %(message)s', level = logging.DEBUG)
 
 ### Bot
-class IRCBot(irc.IRCClient):
+class Replicant(irc.IRCClient):
     
     jobQueue = PriorityQueue()
     nickname = "replicant"
@@ -285,10 +285,10 @@ class IRCBot(irc.IRCClient):
         self.msg(channel, " !protip - Get a hacker pro-tip")
 
 ### Factory
-class IRCBotFactory(protocol.ClientFactory):
+class ReplicantFactory(protocol.ClientFactory):
 
     def buildProtocol(self, addr):
-        p = IRCBot()
+        p = Replicant()
         p.factory = self
         return p
 
@@ -305,7 +305,7 @@ HOST = "172.31.240.1"
 PORT = 6667
 if __name__ == '__main__':
     try:
-        factory = IRCBotFactory()
+        factory = ReplicantFactory()
         reactor.connectTCP(HOST, PORT, factory)
         reactor.run()
     except KeyboardInterrupt:
