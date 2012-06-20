@@ -1,5 +1,11 @@
 *.py[co]
 
+# RCrack files
+rcracki.*
+
+# SQLite Db
+*.db
+
 # Packages
 *.egg
 *.egg-info
