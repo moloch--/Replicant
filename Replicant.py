@@ -25,13 +25,21 @@ from twisted.internet import reactor, protocol
 
 logging.basicConfig(format = '[%(levelname)s] %(asctime)s - %(message)s', level = logging.DEBUG)
 
+### Settings
+HOST = "172.31.240.1"
+PORT = 6667
+CHANNELS = ["&ilikehashes"]
+LM_TABLES   = "/media/data/RainbowTables/LM/"
+MD5_TABLES  = "/media/data/RainbowTables/MD5/"
+NTLM_TABLES = "/media/data/RainbowTables/NTLM/"
+
 ### Bot
 class Replicant(irc.IRCClient):
     
     jobQueue = PriorityQueue()
     nickname = "replicant"
     realname = "replicant"
-    channels = ["&ilikehashes"]
+    channels = CHANNELS
     isBusy = False
     insults = [
         'Your mother was a hampster and your father smelt of elderberries',
@@ -59,10 +67,10 @@ class Replicant(irc.IRCClient):
         logging.info("Initializing SQL-lite db ...")
         dbConn = sqlite3.connect("replicant.db")
         cursor = dbConn.cursor()
-        cursor.execute("CREATE TABLE insults(indx INTEGER PRIMARY KEY, msg TEXT)")
-        cursor.execute("CREATE TABLE insults(indx INTEGER PRIMARY KEY, user TEXT, greets INTEGER)")
-        cursor.execute("CREATE TABLE protips(indx INTEGER PRIMARY KEY, author TEXT, msg TEXT)")
-        cursor.execute("CREATE TABLE history(indx INTEGER PRIMARY KEY, user TEXT, hash TEXT, plaintext TEXT)")
+        cursor.execute("CREATE TABLE insults(id INTEGER PRIMARY KEY, msg TEXT)")
+        cursor.execute("CREATE TABLE insults(id INTEGER PRIMARY KEY, user TEXT, greets INTEGER)")
+        cursor.execute("CREATE TABLE protips(id INTEGER PRIMARY KEY, author TEXT, msg TEXT)")
+        cursor.execute("CREATE TABLE history(id INTEGER PRIMARY KEY, user TEXT, hash TEXT, plaintext TEXT)")
         for tip in self.protips:
             cursor.execute("INSERT INTO protips VALUES (NULL, ?, ?)", ("Unknown", tip,))
         for insult in self.insults:
@@ -98,6 +106,7 @@ class Replicant(irc.IRCClient):
         self.msg(channel, message)
 
     def dccDoSend(self, user, address, port, fileName, size, queryData):
+        ''' Handles dcc connections (not working yet) '''
         logging.info("Recieving dcc file xfer request from %s" % (user,))
         protocol = irc.DccFileReceive(fileName, size, queryData, "/tmp/")
         internet.TCPClient(address, port, protocol)
@@ -154,7 +163,7 @@ class Replicant(irc.IRCClient):
         ''' Gathers the md5 hashes into a list '''
         hashes = self.splitMsg(msg)
         if 0 < len(hashes):
-            self.dispatch(user, channel, hashes, "/media/data/RainbowTables/MD5/")
+            self.dispatch(user, channel, hashes, MD5_TABLES)
         else:
             self.msg(channel, "%s: Found zero hashes in request" % user)
 
@@ -162,7 +171,7 @@ class Replicant(irc.IRCClient):
         ''' Gathers the ntlm hashes into a list '''
         hashes = self.splitMsg(msg)
         if 0 < len(hashes):
-            self.dispatch(user, channel, hashes, "/media/data/RainbowTables/NTLM/")
+            self.dispatch(user, channel, hashes, NTLM_TABLES)
         else:
             self.msg(channel, "%s: Found zero hashes in request" % user)
     
@@ -170,7 +179,7 @@ class Replicant(irc.IRCClient):
         ''' Gathers the ntlm hashes into a list '''
         hashes = self.splitMsg(msg)
         if 0 < len(hashes):
-            self.dispatch(user, channel, hashes, "/media/data/RainbowTables/LM/")
+            self.dispatch(user, channel, hashes, LM_TABLES)
         else:
             self.msg(channel, "%s: Found zero hashes in request" % user)
     
@@ -255,7 +264,7 @@ class Replicant(irc.IRCClient):
         except ValueError:
             count = 5
         cursor = self.dbConn.cursor()
-        cursor.execute("SELECT * FROM history WHERE user = ? ORDER BY indx DESC LIMIT ?", (user, count))
+        cursor.execute("SELECT * FROM history WHERE user = ? ORDER BY id DESC LIMIT ?", (user, count))
         results = cursor.fetchall()
         if len(results) == 0:
             self.msg(channel, "No history for %s" % user)
@@ -301,12 +310,10 @@ class ReplicantFactory(protocol.ClientFactory):
         reactor.stop()
 
 ### Main
-HOST = "172.31.240.1"
-PORT = 6667
 if __name__ == '__main__':
     try:
         factory = ReplicantFactory()
         reactor.connectTCP(HOST, PORT, factory)
         reactor.run()
     except KeyboardInterrupt:
-        pass
+        print '\r[*] User exit'
