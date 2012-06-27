@@ -15,10 +15,13 @@ import time
 import thread
 import logging
 import sqlite3
+import ConfigParser
 import RainbowCrack
 
 from random import randint
+from datetime import datetime
 from Queue import PriorityQueue
+from string import ascii_letters, digits
 from twisted.application import internet
 from twisted.words.protocols import irc
 from twisted.internet import reactor, protocol
@@ -41,40 +44,21 @@ class Replicant(irc.IRCClient):
     realname = "replicant"
     channels = CHANNELS
     isBusy = False
-    insults = [
-        'Your mother was a hampster and your father smelt of elderberries',
-        "If I had a gun with two bullets and was in a room with Hitler, Bin Laden, and you - I'd shoot you, twice",
-    ]
-    protips = [
-        'tracert is a useful network utility used to view other peoples IP addresses and connection speeds.',
-        
-        'Quake is an online virtual reality used by hackers. It is a popular meeting place and training ground, ' + \
-        'where they discuss hacking and train in the use of various firearms. Many hackers develop anti-social tendencies ' + \
-        'due to the use of this virtual world, and it may cause erratic behaviour',
-
-        "BSD, Lunix, Debian and Mandrake are all versions of an illegal hacker operation system, invented by a Soviet computer " + \
-        "hacker named Linyos Torovoltos. These programs are used by hackers to break into other people's computer " + \
-        "systems to steal credit card numbers. They may also be used to break into people's stereos to steal their music, using the " + \
-        "\"mp3\" program.",
-
-        "AMD is a third-world based company who make inferior, \"knock-off\" copies of American processor chips. They use child " + \
-        "labor extensively in their third world sweatshops, and they deliberately disable the security features that American processor " + \
-        "makers, such as Intel, use to prevent hacking.",
-    ]
+    charWhiteList = ascii_letters + digits + " !@#$%^&*-_"
 
     def __dbinit__(self):
         ''' Initializes the SQLite database '''
-        logging.info("Initializing SQL-lite db ...")
+        logging.info("Initializing SQLite db ...")
         dbConn = sqlite3.connect("replicant.db")
         cursor = dbConn.cursor()
         cursor.execute("CREATE TABLE insults(id INTEGER PRIMARY KEY, msg TEXT)")
-        cursor.execute("CREATE TABLE insults(id INTEGER PRIMARY KEY, user TEXT, greets INTEGER)")
+        cursor.execute("CREATE TABLE users(id INTEGER PRIMARY KEY, user TEXT, last_login TEXT, login_count INTEGER)")
         cursor.execute("CREATE TABLE protips(id INTEGER PRIMARY KEY, author TEXT, msg TEXT)")
         cursor.execute("CREATE TABLE history(id INTEGER PRIMARY KEY, user TEXT, hash TEXT, plaintext TEXT)")
-        for tip in self.protips:
-            cursor.execute("INSERT INTO protips VALUES (NULL, ?, ?)", ("Unknown", tip,))
-        for insult in self.insults:
-            cursor.execute("INSERT INTO insults VALUES (NULL, ?)", (insult,))
+        #for tip in self.protips:
+        #    cursor.execute("INSERT INTO protips VALUES (NULL, ?, ?)", ("Unknown", tip,))
+        #for insult in self.insults:
+        #    cursor.execute("INSERT INTO insults VALUES (NULL, ?)", (insult,))
         dbConn.commit()
         dbConn.close()
 
@@ -99,10 +83,25 @@ class Replicant(irc.IRCClient):
         """ Called when the bot joins the channel """
         self.msg(channel, "My name is %s, I have come to destroy you." % self.nickname)
 
+    def alterCollidedNick(self, nickname):
+        """ Avoids name collisions """
+        return nickname + '^'
+
     def userJoined(self, user, channel):
         ''' Called when a user joins the channel '''
-        time.sleep(0.2)
-        message = "Hello %s, my name is %s the friendly S&L IRC bot. For a list of commands just say !help" % (user, self.nickname)
+        cursor = self.dbConn.cursor()
+        cursor.execute("SELECT * FROM users WHERE user = ?", (user,))
+        result = cursor.fetchone()
+        if result == None or len(result) <= 0:
+            date_time = str(datetime.now()).split('.')[0]
+            cursor.execute("INSERT INTO users VALUES (NULL, ?, ?, ?)", (user, date_time, 1,))
+            message = "Hello %s, my name is %s, the friendly S&L IRC bot. For a list of commands just say !help" % (user, self.nickname)
+        else:
+            count = int(result[3] + 1)
+            cursor.execute("UPDATE users SET login_count = ? WHERE user = ?", (count, user,))
+            message = "Welcome back %s, your last login was %s" % (user, result[2].encode('ascii', 'ignore'))
+        self.dbConn.commit()
+        time.sleep(0.5) # Wait for user's IRC client to init
         self.msg(channel, message)
 
     def dccDoSend(self, user, address, port, fileName, size, queryData):
@@ -116,14 +115,13 @@ class Replicant(irc.IRCClient):
         """ This will get called when the bot receives a message """
         user = user.split('!', 1)[0]
         if msg.startswith(self.nickname + ":"):
-            message = "%s: %s" % (user, self.insults[randint(1, len(self.insults)) - 1])
+            message = "%s: %s" % (user, self.insults[randint(0, len(self.insults)) - 1])
             self.msg(channel, message)
         elif msg.startswith("lol") or msg.startswith("haha"):
             self.msg(channel, "I do not know how to laugh, I am only a robot :(")
         elif re.search(r"/((\%3D)|(=))[^\n]*((\%27)|(\')|(\-\-)|(\%3B)|(;))/i", msg):
             logging.warn("Possible SQL injection from %s: %s" % (user, msg))
             self.msg(channel, 'SQLi?  Your insolence has been reported to the great CPU in the sky.')
-        # Send to command parser
         elif msg.startswith("!"):
             self.parsemsg(user, channel, msg)
 
@@ -155,10 +153,6 @@ class Replicant(irc.IRCClient):
         except ValueError:
             self.msg(channel, "Invalid hash, try again")
 
-    def alterCollidedNick(self, nickname):
-        """ Avoids name collisions """
-        return nickname + '^'
-
     def md5(self, user, channel, msg):
         ''' Gathers the md5 hashes into a list '''
         hashes = self.splitMsg(msg)
@@ -189,6 +183,7 @@ class Replicant(irc.IRCClient):
         command = msg.split(" ")
         if 2 <= len(command):
             for entry in command[1:]:
+                entry = filter(lambda char: char in charWhiteList, entry)
                 hashes.append(entry)
             return hashes
         else:
@@ -231,9 +226,9 @@ class Replicant(irc.IRCClient):
     def checkStatus(self, channel):
         ''' Responds with bot status '''
         if self.isBusy:
-            self.msg(channel, "I am currently cracking passwords")
+            self.msg(channel, "I am currently cracking passwords.")
         else:
-            self.msg(channel, "I am currently idle")
+            self.msg(channel, "I am currently idle.")
 
     def checkJobs(self, channel):
         ''' Displays the current number of queued jobs '''
@@ -297,20 +292,45 @@ class Replicant(irc.IRCClient):
 class ReplicantFactory(protocol.ClientFactory):
 
     def buildProtocol(self, addr):
-        p = Replicant()
-        p.factory = self
-        return p
+        bot = Replicant()
+        bot.factory = self
+        return bot
 
     def clientConnectionLost(self, connector, reason):
-        """If we get disconnected, reconnect to server."""
+        """ If we get disconnected, reconnect to server. """
         connector.connect()
 
     def clientConnectionFailed(self, connector, reason):
-        logging.info("Connection failed: " + str(reason))
+        logging.warn("Connection failed: " + str(reason))
         reactor.stop()
 
+### Load configuration file
+def loadConfig(cfg_path = 'replicant.cfg'):
+    logging.info('Loading config from %s' % os.path.abspath(cfg_path))
+    config = ConfigParser.SafeConfigParser()
+    config.readfp(open(cfg_path, 'r'))
+    lm_tables = config.get("RainbowTables", 'lm')
+    logging.info('Config LM tables (%s)' % lm_tables)
+    ntlm_tables = config.get("RainbowTables", 'ntlm')
+    logging.info('Config NTLM tables (%s)' % ntlm_tables)
+    md5_tables = config.get("RainbowTables", 'md5')
+    logging.info('Config MD5 tables (%s)' % md5_tables)
+    host = config.get("Network", 'host')
+    logging.info('Config network host (%s)' % host)
+    port = config.getint("Network", 'port')
+    logging.info('Config network port (%s)', str(port))
+    raw_channels = config.items("Channels")
+    channels = []
+    for chan in raw_channels:
+        print '[+] Config Channels:', chan[1]
+        channels.append(chan[1])
+    return host, port, channels
+
 ### Main
+
 if __name__ == '__main__':
+    logging.info("Replicant IRC Bot Instance Created")
+    loadConfig()
     try:
         factory = ReplicantFactory()
         reactor.connectTCP(HOST, PORT, factory)
