@@ -28,13 +28,23 @@ from twisted.internet import reactor, protocol
 
 logging.basicConfig(format = '[%(levelname)s] %(asctime)s - %(message)s', level = logging.DEBUG)
 
-### Settings
-HOST = "172.31.240.1"
-PORT = 6667
-CHANNELS = ["&ilikehashes"]
-LM_TABLES   = "/media/data/RainbowTables/LM/"
-MD5_TABLES  = "/media/data/RainbowTables/MD5/"
-NTLM_TABLES = "/media/data/RainbowTables/NTLM/"
+### Load configuration from file
+logging.info("Replicant IRC Bot Starting...")
+cfg_path = os.path.abspath("replicant.cfg")
+logging.info('Loading config from %s' % cfg_path)
+config = ConfigParser.SafeConfigParser()
+config.readfp(open(cfg_path, 'r'))
+LM_TABLES = config.get("RainbowTables", 'lm')
+logging.info('Config LM tables (%s)' % LM_TABLES)
+NTLM_TABLES = config.get("RainbowTables", 'ntlm')
+logging.info('Config NTLM tables (%s)' % NTLM_TABLES)
+MD5_TABLES = config.get("RainbowTables", 'md5')
+logging.info('Config MD5 tables (%s)' % MD5_TABLES)
+host = config.get("Network", 'host')
+logging.info('Config network host (%s)' % host)
+port = config.getint("Network", 'port')
+logging.info('Config network port (%s)', str(port))
+CHANNELS = config.items("Channels")
 
 ### Bot
 class Replicant(irc.IRCClient):
@@ -42,8 +52,8 @@ class Replicant(irc.IRCClient):
     jobQueue = PriorityQueue()
     nickname = "replicant"
     realname = "replicant"
-    channels = CHANNELS
     isBusy = False
+    channels = CHANNELS
     charWhiteList = ascii_letters + digits + " !@#$%^&*-_"
 
     def __dbinit__(self):
@@ -55,10 +65,6 @@ class Replicant(irc.IRCClient):
         cursor.execute("CREATE TABLE users(id INTEGER PRIMARY KEY, user TEXT, last_login TEXT, login_count INTEGER)")
         cursor.execute("CREATE TABLE protips(id INTEGER PRIMARY KEY, author TEXT, msg TEXT)")
         cursor.execute("CREATE TABLE history(id INTEGER PRIMARY KEY, user TEXT, hash TEXT, plaintext TEXT)")
-        #for tip in self.protips:
-        #    cursor.execute("INSERT INTO protips VALUES (NULL, ?, ?)", ("Unknown", tip,))
-        #for insult in self.insults:
-        #    cursor.execute("INSERT INTO insults VALUES (NULL, ?)", (insult,))
         dbConn.commit()
         dbConn.close()
 
@@ -76,8 +82,8 @@ class Replicant(irc.IRCClient):
             self.__dbinit__()
         self.dbConn = sqlite3.connect("replicant.db")
         for channel in self.channels:
-            logging.info("Join channel: " + channel)
-            self.join(channel)
+            logging.info("Join channel: %s" % channel[1])
+            self.join(channel[1])
 
     def joined(self, channel):
         """ Called when the bot joins the channel """
@@ -114,13 +120,13 @@ class Replicant(irc.IRCClient):
     def privmsg(self, user, channel, msg):
         """ This will get called when the bot receives a message """
         user = user.split('!', 1)[0]
-        if msg.startswith(self.nickname + ":"):
+        if msg.startswith(self.nickname + ":") and 0 < len(insults):
             message = "%s: %s" % (user, self.insults[randint(0, len(self.insults)) - 1])
             self.msg(channel, message)
         elif msg.startswith("lol") or msg.startswith("haha"):
             self.msg(channel, "I do not know how to laugh, I am only a robot :(")
         elif re.search(r"/((\%3D)|(=))[^\n]*((\%27)|(\')|(\-\-)|(\%3B)|(;))/i", msg):
-            logging.warn("Possible SQL injection from %s: %s" % (user, msg))
+            logging.warn("Possible SQL injection attempt from %s: %s" % (user, msg))
             self.msg(channel, 'SQLi?  Your insolence has been reported to the great CPU in the sky.')
         elif msg.startswith("!"):
             self.parsemsg(user, channel, msg)
@@ -249,8 +255,9 @@ class Replicant(irc.IRCClient):
         cursor = self.dbConn.cursor()
         cursor.execute("SELECT * FROM protips ORDER BY RANDOM() LIMIT 1")
         result = cursor.fetchone()
-        message = "%s --%s" % (result[2], result[1])
-        self.msg(channel, message.encode('ascii', 'ignore'))
+        if result != None and 0 < len(result):
+            message = "%s --%s" % (result[2], result[1])
+            self.msg(channel, message.encode('ascii', 'ignore'))
 
     def getHistory(self, user, channel, msg):
         ''' Retreives previously cracked passwords from the db '''
@@ -304,36 +311,11 @@ class ReplicantFactory(protocol.ClientFactory):
         logging.warn("Connection failed: " + str(reason))
         reactor.stop()
 
-### Load configuration file
-def loadConfig(cfg_path = 'replicant.cfg'):
-    logging.info('Loading config from %s' % os.path.abspath(cfg_path))
-    config = ConfigParser.SafeConfigParser()
-    config.readfp(open(cfg_path, 'r'))
-    lm_tables = config.get("RainbowTables", 'lm')
-    logging.info('Config LM tables (%s)' % lm_tables)
-    ntlm_tables = config.get("RainbowTables", 'ntlm')
-    logging.info('Config NTLM tables (%s)' % ntlm_tables)
-    md5_tables = config.get("RainbowTables", 'md5')
-    logging.info('Config MD5 tables (%s)' % md5_tables)
-    host = config.get("Network", 'host')
-    logging.info('Config network host (%s)' % host)
-    port = config.getint("Network", 'port')
-    logging.info('Config network port (%s)', str(port))
-    raw_channels = config.items("Channels")
-    channels = []
-    for chan in raw_channels:
-        print '[+] Config Channels:', chan[1]
-        channels.append(chan[1])
-    return host, port, channels
-
 ### Main
-
 if __name__ == '__main__':
-    logging.info("Replicant IRC Bot Instance Created")
-    loadConfig()
     try:
         factory = ReplicantFactory()
-        reactor.connectTCP(HOST, PORT, factory)
+        reactor.connectTCP(host, port, factory)
         reactor.run()
     except KeyboardInterrupt:
         print '\r[*] User exit'
