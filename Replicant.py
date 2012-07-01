@@ -30,7 +30,13 @@ logging.basicConfig(format = '[%(levelname)s] %(asctime)s - %(message)s', level 
 
 ### Load configuration from file
 logging.info("Replicant IRC Bot Starting...")
-cfg_path = os.path.abspath("replicant.cfg")
+if len(sys.argv) < 2:
+    cfg_path = os.path.abspath("replicant.cfg")
+else:
+    cfg_path = sys.argv[1]
+if not (os.path.exists(cfg_path) and os.path.isfile(cfg_path)):
+    logging.error("No configuration file found at %s" % cfg_path)
+    os._exit(1)
 logging.info('Loading config from %s' % cfg_path)
 config = ConfigParser.SafeConfigParser()
 config.readfp(open(cfg_path, 'r'))
@@ -120,7 +126,7 @@ class Replicant(irc.IRCClient):
     def privmsg(self, user, channel, msg):
         """ This will get called when the bot receives a message """
         user = user.split('!', 1)[0]
-        if msg.startswith(self.nickname + ":") and 0 < len(insults):
+        if msg.startswith(self.nickname + ":") and 0 < len(self.insults):
             message = "%s: %s" % (user, self.insults[randint(0, len(self.insults)) - 1])
             self.msg(channel, message)
         elif msg.startswith("lol") or msg.startswith("haha"):
@@ -184,12 +190,12 @@ class Replicant(irc.IRCClient):
             self.msg(channel, "%s: Found zero hashes in request" % user)
     
     def splitMsg(self, msg):
-        ''' Splits message into a list of hashes '''
+        ''' Splits message into a list of hashes, filters non-white list chars '''
         hashes = []
         command = msg.split(" ")
         if 2 <= len(command):
             for entry in command[1:]:
-                entry = filter(lambda char: char in charWhiteList, entry)
+                entry = filter(lambda char: char in self.charWhiteList, entry)
                 hashes.append(entry)
             return hashes
         else:
@@ -238,9 +244,9 @@ class Replicant(irc.IRCClient):
 
     def checkJobs(self, channel):
         ''' Displays the current number of queued jobs '''
-        current = ''
+        current = '.'
         if self.isBusy:
-            current = ', and one in progress'
+            current = ', and one in progress.'
         self.msg(channel, "There are currently %d queued job(s)%s" % (self.jobQueue.qsize(), current))
     
     def addProtip(self, user, channel, msg):
@@ -258,6 +264,8 @@ class Replicant(irc.IRCClient):
         if result != None and 0 < len(result):
             message = "%s --%s" % (result[2], result[1])
             self.msg(channel, message.encode('ascii', 'ignore'))
+        else:
+            self.msg(channel, "There are currently no pro-tips in the database, add one using !addtip")
 
     def getHistory(self, user, channel, msg):
         ''' Retreives previously cracked passwords from the db '''
