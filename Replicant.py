@@ -219,8 +219,11 @@ class Replicant(irc.IRCClient):
 
     def md5(self, user, channel, msg):
         ''' Gathers the md5 hashes into a list '''
-        hashes = self.splitMsg(msg)
+        print 'msg:', msg
+        hashes = self.splitMsg(msg[len("!md5"):])
+        print 'got:', hashes
         hashes = filter(lambda hsh: len(hsh) == 32, hashes)
+        print 'filter:', hashes
         if 0 < len(hashes):
             self.dispatch(user, channel, msg, hashes, MD5_TABLES)
         else:
@@ -228,12 +231,20 @@ class Replicant(irc.IRCClient):
 
     def ntlm(self, user, channel, msg):
         ''' Gathers the ntlm hashes into a list '''
-        hashes = self.splitMsg(msg)
+        hashes = self.splitMsg(msg[len("!ntlm"):])
         if 0 < len(hashes):
             self.dispatch(user, channel, msg, hashes, NTLM_TABLES)
         else:
             self.display(user, channel, "%s: Found zero hashes in request" % user)
-    
+
+    def lm(self, user, channel, msg):
+        ''' Gathers the ntlm hashes into a list '''
+        hashes = self.splitMsg(msg[len("!lm"):])
+        if 0 < len(hashes):
+            self.dispatch(user, channel, msg, hashes, LM_TABLES)
+        else:
+            self.display(user, channel, "%s: Found zero hashes in request" % user)
+
     def crack(self, user, channel, msg):
         hashes = self.splitMsg(msg)
         hashes = filter(lambda hsh: len(hsh) == 32, hashes)
@@ -247,8 +258,8 @@ class Replicant(irc.IRCClient):
         hashes = []
         msg = msg.lower().replace(' ', '')
         hashList = msg.split(",")
-        if 2 <= len(hashList):
-            for hsh in hashList[1:]:
+        if 0 < len(hashList):
+            for hsh in hashList:
                 cleanHash = filter(lambda char: char in self.charWhiteList, hsh)
                 hashes.append(cleanHash)
         return hashes
@@ -258,13 +269,13 @@ class Replicant(irc.IRCClient):
         if not self.isBusy:
             self.display(user, channel, "%s: Starting new job, cracking %d hash(es)" % (user, len(hashes),))
             if  msg.startswith("!crack"):
-                thread.start_new_thread(self.__crack__, (user, channel, msg, hashes,))
+                thread.start_new_thread(self.__crack__, (user, channel, msg, hashes, path))
             else:
                 thread.start_new_thread(self.__rainbowCrack__, (user, channel, msg, hashes, path,))
         else:
             self.display(user, channel, "%s: Queued new job with %d hash(es)" % (user, len(hashes),))
             logging.info("Job in progress, pushing to queue")
-            self.jobQueue.put((priority, (user, channel, msg, hashes, path,),))
+            self.jobQueue.put((priority, (user, channel, msg, hashes, path),))
 
     def __pop__(self):
         ''' Pops a job off the queue '''
@@ -275,7 +286,7 @@ class Replicant(irc.IRCClient):
         else:
             thread.start_new_thread(self.__rainbowCrack__, job[1])
 
-    def __rainbowCrack__(self, user, channel, hashes, path):
+    def __rainbowCrack__(self, user, channel, msg, hashes, path):
         ''' Cracks a list of hashes '''
         self.isBusy = True
         logging.info("Cracking %d hashes for %s" % (len(hashes), user))
