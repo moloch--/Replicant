@@ -253,8 +253,9 @@ class Replicant(irc.IRCClient):
     def splitMsg(self, msg):
         ''' Splits message into a list of hashes, filters non-white list chars '''
         hashes = []
-        msg = msg.lower().replace(' ', '')
+        msg = msg.lower().replace(' ', ',')
         hashList = msg.split(",")
+        hashList = filter(lambda hsh: 0 < len(hsh), hashList)
         if 0 < len(hashList):
             for hsh in hashList:
                 cleanHash = filter(lambda char: char in self.charWhiteList, hsh)
@@ -301,7 +302,7 @@ class Replicant(irc.IRCClient):
         ''' Cracks md5 hashes using a word list '''
         words = self.__loadWordlist__()
         results = CrackPy.md5(hashes, words, threads=THREADS, debug=DEBUG)
-        self.saveResults(results)
+        self.saveResults(user, channel, results)
         return results
 
     def __loadWordlist__(self):
