@@ -138,9 +138,6 @@ class Replicant(irc.IRCClient):
         if result == None or len(result) <= 0:
             date_time = str(datetime.now()).split('.')[0]
             cursor.execute("INSERT INTO users VALUES (NULL, ?, ?, ?)", (user, date_time, 1,))
-            #message = "Hello %s, my name is %s, the friendly S&L IRC bot. For a list of commands just say !help" % (user, self.nickname)
-            #time.sleep(0.5) # Wait for user's IRC client to init
-            #self.display(user, channel, message, whisper=True)
         else:
             count = int(result[3]) + 1
             cursor.execute("UPDATE users SET login_count = ? WHERE user = ?", (count, user,))
@@ -155,11 +152,12 @@ class Replicant(irc.IRCClient):
                 self.display(user, channel, message.encode('ascii', 'ignore'), whisper=True)
                 cursor.execute("UPDATE messages SET delieverd = ?, recieved = ? WHERE id = ?", 
                     (True, str(datetime.now()), msg[0],))
+        cursor.execute("UPDATE users SET last_login = ? WHERE user = ?", (str(datetime.now()), user,))
         self.dbConn.commit()
 
     def privmsg(self, user, channel, msg):
         ''' This will get called when the bot receives a message '''
-        user = user.split('!', 1)[0]
+        user = user.split('!', 1)[0].lower()
         if channel == self.nickname:
             logging.debug("Private message received; response channel is '%s'" % (user,))
             channel = user
@@ -209,8 +207,8 @@ class Replicant(irc.IRCClient):
                 self.getHistory(user, channel, msg)
             elif msg.startswith("!send"):
                 self.sendMessage(user, channel, msg)
-            elif msg.startswith("!track"):
-                self.trackMessage(user, channel, msg)
+            elif msg.startswith("!seen"):
+                self.seen(user, channel, msg[len("!seen"):])
             else:
                 self.display(user, channel, "Not a command, see !help")
         except ValueError:
@@ -247,10 +245,10 @@ class Replicant(irc.IRCClient):
     def dispatch(self, user, channel,  hashes, path, priority=1):
         ''' Starts cracking job, or pushes job onto the queue '''
         if not self.isBusy:
-            self.display(user, channel, "%s: Starting new job, cracking %d hash(es)" % (user, len(hashes)))
-            thread.start_new_thread(self.crackHash, (channel, user, hashes, path))
+            self.display(user, channel, "%s: Starting new job, cracking %d hash(es)" % (user, len(hashes),))
+            thread.start_new_thread(self.crackHash, (channel, user, hashes, path,))
         else:
-            self.display(user, channel, "%s: Queued new job with %d hash(es)" % (user, len(hashes)))
+            self.display(user, channel, "%s: Queued new job with %d hash(es)" % (user, len(hashes),))
             logging.info("Job in progress, pushing to queue")
             self.jobQueue.put((priority, (channel, user, hashes, path),))
 
@@ -271,8 +269,8 @@ class Replicant(irc.IRCClient):
         dbConn = sqlite3.connect("replicant.db")
         cursor = dbConn.cursor()
         for key in results.keys():
-            cursor.execute("INSERT INTO history VALUES (NULL, ?, ?, ?)", (user, key, results[key]))
-            self.display(channel, " %s: %s -> %s" % (user, key, results[key]))
+            cursor.execute("INSERT INTO history VALUES (NULL, ?, ?, ?)", (user, key, results[key],))
+            self.display(channel, " %s: %s -> %s" % (user, key, results[key],))
         dbConn.commit()
         dbConn.close()
         logging.info("Job compelted for %s" % user)
@@ -293,7 +291,7 @@ class Replicant(irc.IRCClient):
         current = '.'
         if self.isBusy:
             current = ', and one in progress.'
-        self.display(user, channel, "There are currently %d queued job(s)%s" % (self.jobQueue.qsize(), current))
+        self.display(user, channel, "There are currently %d queued job(s)%s" % (self.jobQueue.qsize(), current,))
     
     def addProtip(self, user, channel, msg):
         ''' Adds a pro-tip to the database '''
@@ -309,7 +307,7 @@ class Replicant(irc.IRCClient):
         result = cursor.fetchone()
         if result != None and 0 < len(result):
             message = "%s --%s" % (result[2][:256], result[1][:64])
-            self.display(user, channel, "Pro-tip:" + message.encode('ascii', 'ignore'))
+            self.display(user, channel, "Pro-tip:" + message)
         else:
             self.display(user, channel, "There are currently no pro-tips in the database, add one using !addtip")
 
@@ -326,8 +324,8 @@ class Replicant(irc.IRCClient):
             self.display(user, channel, "No history for %s" % user)
         else:
             for row in results:
-                messsage = " %s: [%d] %s -> %s" % (row[1], row[0], row[2], row[3])
-                self.display(channel, messsage.encode('ascii', 'ignore'))
+                messsage = " [%d] %s -> %s" % (row[0], row[2], row[3])
+                self.display(user, channel, messsage)
 
     def muteBot(self, user, channel, msg):
         ''' Toggle mute on/off '''
@@ -343,6 +341,7 @@ class Replicant(irc.IRCClient):
             self.display(user, channel, "Cannot mute this channel.")
 
     def sendMessage(self, user, channel, msg):
+        ''' Leave a message for an offline user '''
         msg_parts = msg.split(" ")
         if 3 <= len(msg_parts):
             cursor = self.dbConn.cursor()
@@ -364,7 +363,18 @@ class Replicant(irc.IRCClient):
                     self.display(user, channel, "Unknown user '%s', please re-join the channel." % (user,))
                 self.display(user, channel, "Sorry I can only deliever messages to/from users I know.")
         else:
-            self.display("Malformed command, !message <user> <message>")
+            self.display("Malformed command, !send <user> <message>")
+
+    def seen(self, user, channel, message):
+        ''' Displays when a user last joined the channel '''
+        cursor = self.dbConn.cursor()
+        quser = message.replace(' ', '').lower()
+        cursor.execute("SELECT last_login FROM users WHERE user = ?", (quser,))
+        result = cursor.fetchone()
+        if result is not None:
+            self.display(user, channel, " %s was last seen %s" % (quser, result[0],))
+        else:
+            self.display(user, channel, "I have never seen a user by the name '%s'" % quser)
 
     def display(self, user, channel, message, whisper=False):
         ''' Intelligently wraps msg, based on mute setting '''
@@ -373,7 +383,7 @@ class Replicant(irc.IRCClient):
             display_channel = user
         else:
             display_channel = channel
-        self.msg(display_channel, message)
+        self.msg(display_channel, message.encode('ascii', 'ignore'))
 
     def leave_all(self):
         ''' Leave all channels '''
@@ -391,22 +401,22 @@ class Replicant(irc.IRCClient):
 
     def help(self, user, channel, msg):
         ''' Displays a helpful message '''
-        self.display(user, channel, " > Commands: Replicant IRC Bot ")
-        self.display(user, channel, "-------------------------------------")
-        self.display(user, channel, " !md5 <hash1,hash2> - Crack an Md5 hashes")
-        self.display(user, channel, " !ntlm <hash1,hash2> - Crack an NTLM hashes")
-        self.display(user, channel, " !lm <hash1,hash2> - Crack an LM hashes")
-        self.display(user, channel, " !help <all> - Display this helpful message")
+        self.display(user, channel, " > Commands: Replicant IRC Bot ", whisper=True)
+        self.display(user, channel, "-------------------------------------", whisper=True)
+        self.display(user, channel, " !md5 <hash1,hash2> - Crack an Md5 hashes", whisper=True)
+        self.display(user, channel, " !ntlm <hash1,hash2> - Crack an NTLM hashes", whisper=True)
+        self.display(user, channel, " !lm <hash1,hash2> - Crack an LM hashes", whisper=True)
+        self.display(user, channel, " !help (all) - Display this helpful message", whisper=True)
         if msg.lower() == '!help all':
-            self.display(user, channel, " !mute - Send all responses via pm")
-            self.display(user, channel, " !status - Checks if the bot is busy")
-            self.display(user, channel, " !jobs - Display the current queue size")
-            self.display(user, channel, " !history <count> - Display your history")
-            self.display(user, channel, " !addtip <tip> - Add a new pro-tip")
-            self.display(user, channel, " !protip - Get a hacker pro-tip")
-            self.display(user, channel, " !send - Send an offline user a message")
-            self.display(user, channel, " !track - Track messages sent to offline users")
-            self.display(user, channel, " !about - View version information")
+            self.display(user, channel, " !mute - Send all responses via pm", whisper=True)
+            self.display(user, channel, " !status - Checks if the bot is busy", whisper=True)
+            self.display(user, channel, " !jobs - Display the current queue size", whisper=True)
+            self.display(user, channel, " !history (count) - Display your history", whisper=True)
+            self.display(user, channel, " !addtip <tip> - Add a new pro-tip", whisper=True)
+            self.display(user, channel, " !protip - Get a hacker pro-tip", whisper=True)
+            self.display(user, channel, " !send - Send an offline user a message", whisper=True)
+            self.display(user, channel, " !seen <user> - Display when a user was last seen.", whisper=True)
+            self.display(user, channel, " !about - View version information", whisper=True)
 
 ### Factory
 class ReplicantFactory(protocol.ClientFactory):
