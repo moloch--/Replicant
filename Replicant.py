@@ -117,9 +117,9 @@ class Replicant(irc.IRCClient):
             self.__dbinit__()
         self.dbConn = sqlite3.connect("replicant.db")
         for key_pair in CHANNELS:
-            logging.info("Join channel: %s" % key_pair[0])
             channel = ChannelSettings(key_pair[0], key_pair[1])
             self.channels[channel.name] = channel
+            logging.info("Joined channel %s" % channel.name)
             if channel.password is None:
                 self.join(channel.name)
             else:
@@ -219,11 +219,8 @@ class Replicant(irc.IRCClient):
 
     def md5(self, user, channel, msg):
         ''' Gathers the md5 hashes into a list '''
-        print 'msg:', msg
         hashes = self.splitMsg(msg[len("!md5"):])
-        print 'got:', hashes
         hashes = filter(lambda hsh: len(hsh) == 32, hashes)
-        print 'filter:', hashes
         if 0 < len(hashes):
             self.dispatch(user, channel, msg, hashes, MD5_TABLES)
         else:
@@ -294,7 +291,7 @@ class Replicant(irc.IRCClient):
             results = RainbowCrack.crack(len(hashes), hashes, path, debug=DEBUG, maxThreads=THREADS)
         except ValueError:
             logging.exeception("Error while cracking hashes ... ")
-        self.saveResults(user, results)
+        self.saveResults(user, channel, results)
         logging.info("Job compelted for %s" % user)
         if 0 < self.jobQueue.qsize():
             self.__pop__()
@@ -306,7 +303,7 @@ class Replicant(irc.IRCClient):
         self.isBusy = True
         words = self.loadWordlist()
         results = CrackPy.md5(hashes, words, threads=THREADS, debug=DEBUG)
-        self.saveResults(user, results)
+        self.saveResults(user, channel, results)
         logging.info("Job compelted for %s" % user)
         if 0 < self.jobQueue.qsize():
             self.__pop__()
@@ -328,21 +325,21 @@ class Replicant(irc.IRCClient):
             words = ['password', 'love', 'sex', 'secret', 'god']
         return words
 
-    def saveResults(self, user, results):
+    def saveResults(self, user, channel, results):
         dbConn = sqlite3.connect("replicant.db")
         cursor = dbConn.cursor()
         for key in results.keys():
             cursor.execute("INSERT INTO history VALUES (NULL, ?, ?, ?)", (user, key, results[key],))
-            self.display(channel, " %s -> %s" % (key, results[key],))
+            self.display(user, channel, " %s -> %s" % (key, results[key],))
         dbConn.commit()
         dbConn.close()
 
-    def checkStatus(self, channel):
+    def checkStatus(self, user, channel, msg):
         ''' Responds with bot status '''
         if self.isBusy:
-            self.display(channel, "I am currently cracking passwords.")
+            self.display(user, channel, "I am currently cracking passwords.")
         else:
-            self.display(channel, "I am currently idle.")
+            self.display(user, channel, "I am currently idle, give me something to crack!")
 
     def checkJobs(self, user, channel, msg):
         ''' Displays the current number of queued jobs '''
