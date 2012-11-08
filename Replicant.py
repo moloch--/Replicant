@@ -15,6 +15,7 @@ import time
 import thread
 import logging
 import sqlite3
+import CrackPy
 import ConfigParser
 import RainbowCrack
 
@@ -46,6 +47,8 @@ NTLM_TABLES = config.get("RainbowTables", 'ntlm')
 logging.info('Config NTLM tables (%s)' % NTLM_TABLES)
 MD5_TABLES = config.get("RainbowTables", 'md5')
 logging.info('Config MD5 tables (%s)' % MD5_TABLES)
+WORDLIST = config.get("Wordlist", 'path')
+logging.info('Config wordlist (%s)' % WORDLIST)
 HOST = config.get("Network", 'host')
 logging.info('Config network host (%s)' % HOST)
 PORT = config.getint("Network", 'port')
@@ -219,18 +222,26 @@ class Replicant(irc.IRCClient):
         hashes = self.splitMsg(msg)
         hashes = filter(lambda hsh: len(hsh) == 32, hashes)
         if 0 < len(hashes):
-            self.dispatch(user, channel, hashes, MD5_TABLES)
+            self.dispatch(user, channel, msg, hashes, MD5_TABLES)
         else:
-            self.display(channel, "%s: Found zero hashes in request" % user)
+            self.display(user, channel, "%s: Found zero hashes in request" % user)
 
     def ntlm(self, user, channel, msg):
         ''' Gathers the ntlm hashes into a list '''
         hashes = self.splitMsg(msg)
         if 0 < len(hashes):
-            self.dispatch(user, channel, hashes, NTLM_TABLES)
+            self.dispatch(user, channel, msg, hashes, NTLM_TABLES)
         else:
-            self.display(channel, "%s: Found zero hashes in request" % user)
+            self.display(user, channel, "%s: Found zero hashes in request" % user)
     
+    def crack(self, user, channel, msg):
+        hashes = self.splitMsg(msg)
+        hashes = filter(lambda hsh: len(hsh) == 32, hashes)
+        if 0 < len(hashes):
+            self.dispatch(user, channel, msg, hashes)
+        else:
+            self.display(user, channel, "%s: Found zero hashes in request" % user)
+
     def splitMsg(self, msg):
         ''' Splits message into a list of hashes, filters non-white list chars '''
         hashes = []
@@ -242,23 +253,29 @@ class Replicant(irc.IRCClient):
                 hashes.append(cleanHash)
         return hashes
 
-    def dispatch(self, user, channel,  hashes, path, priority=1):
-        ''' Starts cracking job, or pushes job onto the queue '''
+    def dispatch(self, user, channel, msg, hashes, path=None, priority=1):
+        ''' Starts cracking jobs, or pushes the job onto the queue '''
         if not self.isBusy:
             self.display(user, channel, "%s: Starting new job, cracking %d hash(es)" % (user, len(hashes),))
-            thread.start_new_thread(self.crackHash, (channel, user, hashes, path,))
+            if  msg.startswith("!crack"):
+                thread.start_new_thread(self.__crack__, (user, channel, msg, hashes,))
+            else:
+                thread.start_new_thread(self.__rainbowCrack__, (user, channel, msg, hashes, path,))
         else:
             self.display(user, channel, "%s: Queued new job with %d hash(es)" % (user, len(hashes),))
             logging.info("Job in progress, pushing to queue")
-            self.jobQueue.put((priority, (channel, user, hashes, path),))
+            self.jobQueue.put((priority, (user, channel, msg, hashes, path,),))
 
-    def popJob(self):
+    def __pop__(self):
         ''' Pops a job off the queue '''
         job = self.jobQueue.get()
         logging.info("Popping job off queue, %d job(s) remain " % self.jobQueue.qsize())
-        thread.start_new_thread(self.crackHash, job[1])
+        if  msg.startswith("!crack"):
+            thread.start_new_thread(self.__crack__, job[1])
+        else:
+            thread.start_new_thread(self.__rainbowCrack__, job[1])
 
-    def crackHash(self, channel, user, hashes, path):
+    def __rainbowCrack__(self, user, channel, hashes, path):
         ''' Cracks a list of hashes '''
         self.isBusy = True
         logging.info("Cracking %d hashes for %s" % (len(hashes), user))
@@ -266,18 +283,48 @@ class Replicant(irc.IRCClient):
             results = RainbowCrack.crack(len(hashes), hashes, path, debug=DEBUG, maxThreads=THREADS)
         except ValueError:
             logging.exeception("Error while cracking hashes ... ")
+        self.saveResults(user, results)
+        logging.info("Job compelted for %s" % user)
+        if 0 < self.jobQueue.qsize():
+            self.__pop__()
+        else:
+            self.isBusy = False
+
+    def __crack__(self, user, channel, msg, hashes, path=None):
+        ''' Cracks md5 hashes using a word list '''
+        self.isBusy = True
+        words = self.loadWordlist()
+        results = CrackPy.md5(hashes, words, threads=THREADS, debug=DEBUG)
+        self.saveResults(user, results)
+        logging.info("Job compelted for %s" % user)
+        if 0 < self.jobQueue.qsize():
+            self.__pop__()
+        else:
+            self.isBusy = False
+
+    def loadWordlist(self):
+        ''' Load words from file '''
+        words = []
+        if os.path.exists(WORDLIST) and os.path.isfile(WORDLIST):
+            wordlist_file = open(WORDLIST, 'r')
+            for word in wordlist_file.readlines():
+                if word.startswith("#!comment:"):
+                    continue
+                words.append(word.replace('\n', ''))
+            wordlist_file.close()
+        else:
+            logging.error("Wordlist file does not exist '%s'" % WORDLIST)
+            words = ['password', 'love', 'sex', 'secret', 'god']
+        return words
+
+    def saveResults(self, user, results):
         dbConn = sqlite3.connect("replicant.db")
         cursor = dbConn.cursor()
         for key in results.keys():
             cursor.execute("INSERT INTO history VALUES (NULL, ?, ?, ?)", (user, key, results[key],))
-            self.display(channel, " %s: %s -> %s" % (user, key, results[key],))
+            self.display(channel, " %s -> %s" % (key, results[key],))
         dbConn.commit()
         dbConn.close()
-        logging.info("Job compelted for %s" % user)
-        if 0 < self.jobQueue.qsize():
-            self.popJob()
-        else:
-            self.isBusy = False
 
     def checkStatus(self, channel):
         ''' Responds with bot status '''
