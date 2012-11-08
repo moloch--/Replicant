@@ -264,13 +264,10 @@ class Replicant(irc.IRCClient):
     def dispatch(self, user, channel, msg, hashes, path=None, priority=1):
         ''' Starts cracking jobs, or pushes the job onto the queue '''
         if not self.isBusy:
-            self.display(user, channel, "%s: Starting new job, cracking %d hash(es)" % (user, len(hashes),))
-            if  msg.startswith("!crack"):
-                thread.start_new_thread(self.__crack__, (user, channel, msg, hashes, path))
-            else:
-                thread.start_new_thread(self.__rainbowCrack__, (user, channel, msg, hashes, path,))
+            self.display(user, channel, "Starting new job for %s; cracking %d hash(es)" % (user, len(hashes),))
+            thread.start_new_thread(self.__crack__, (user, channel, msg, hashes, path,))
         else:
-            self.display(user, channel, "%s: Queued new job with %d hash(es)" % (user, len(hashes),))
+            self.display(user, channel, "Queued job for %s with %d hash(es)" % (user, len(hashes),))
             logging.info("Job in progress, pushing to queue")
             self.jobQueue.put((priority, (user, channel, msg, hashes, path),))
 
@@ -278,39 +275,36 @@ class Replicant(irc.IRCClient):
         ''' Pops a job off the queue '''
         job = self.jobQueue.get()
         logging.info("Popping job off queue, %d job(s) remain " % self.jobQueue.qsize())
-        if  msg.startswith("!crack"):
-            thread.start_new_thread(self.__crack__, job[1])
-        else:
-            thread.start_new_thread(self.__rainbowCrack__, job[1])
+        thread.start_new_thread(self.__crack__, job[1])
 
-    def __rainbowCrack__(self, user, channel, msg, hashes, path):
+    def __crack__(self, user, channel, msg, hashes, path):
         ''' Cracks a list of hashes '''
         self.isBusy = True
         logging.info("Cracking %d hashes for %s" % (len(hashes), user))
-        try:
-            results = RainbowCrack.crack(len(hashes), hashes, path, debug=DEBUG, maxThreads=THREADS)
-        except ValueError:
-            logging.exeception("Error while cracking hashes ... ")
-        self.saveResults(user, channel, results)
+        if msg.startswith("!md5"):
+            results = self.__md5__(user, channel, msg, hashes)
+            for hsh in results.keys(): 
+                hashes.remove(hsh)
+        if 0 < len(hashes):
+            try:
+                results = RainbowCrack.crack(len(hashes), hashes, path, debug=DEBUG, maxThreads=THREADS)
+            except ValueError:
+                logging.exeception("Error while cracking hashes ... ")
+            self.saveResults(user, channel, results)
         logging.info("Job compelted for %s" % user)
         if 0 < self.jobQueue.qsize():
             self.__pop__()
         else:
             self.isBusy = False
 
-    def __crack__(self, user, channel, msg, hashes, path=None):
+    def __md5__(self, user, channel, msg, hashes):
         ''' Cracks md5 hashes using a word list '''
-        self.isBusy = True
-        words = self.loadWordlist()
+        words = self.__loadWordlist__()
         results = CrackPy.md5(hashes, words, threads=THREADS, debug=DEBUG)
-        self.saveResults(user, channel, results)
-        logging.info("Job compelted for %s" % user)
-        if 0 < self.jobQueue.qsize():
-            self.__pop__()
-        else:
-            self.isBusy = False
+        self.saveResults(results)
+        return results
 
-    def loadWordlist(self):
+    def __loadWordlist__(self):
         ''' Load words from file '''
         words = []
         if os.path.exists(WORDLIST) and os.path.isfile(WORDLIST):
