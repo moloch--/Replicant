@@ -3,10 +3,9 @@
 @author: Moloch
 @copyright: GPLv3
 @version: 0.2
-
+--------------------
 Replicant is an IRC bot that implements the RCrackPy interface
 to automatically crack passwords using rainbow tables.
-
 '''
 
 import re
@@ -65,7 +64,10 @@ class ChannelSettings(object):
     isMuted = False
 
     def __init__(self, name, password):
-        self.name = name
+        if name[0] == '&':
+            self.name = name
+        else:
+            self.name = "#" + name
         if password.lower() == '__none__':
             self.password = None
         else:
@@ -263,7 +265,7 @@ class Replicant(irc.IRCClient):
         self.isBusy = True
         logging.info("Cracking %d hashes for %s" % (len(hashes), user))
         try:
-            results = RainbowCrack.crack(len(hashes), hashes, path, debug=True, maxThreads=3)
+            results = RainbowCrack.crack(len(hashes), hashes, path, debug=DEBUG, maxThreads=THREADS)
         except ValueError:
             logging.exeception("Error while cracking hashes ... ")
         dbConn = sqlite3.connect("replicant.db")
