@@ -248,7 +248,7 @@ class Replicant(irc.IRCClient):
         if 0 < len(hashes):
             self.dispatch(user, channel, msg, hashes)
         else:
-            self.display(user, channel, "%s: Found zero hashes in request" % user)
+            self.display(user, channel, "Found zero hashes in request" % user)
 
     def splitMsg(self, msg):
         ''' Splits message into a list of hashes, filters non-white list chars '''
@@ -288,7 +288,7 @@ class Replicant(irc.IRCClient):
                 hashes.remove(hsh)
         if 0 < len(hashes):
             try:
-                results = RainbowCrack.crack(len(hashes), hashes, path, debug=DEBUG, maxThreads=THREADS)
+                results = RainbowCrack.crack(hashes, path, debug=DEBUG, maxThreads=THREADS)
             except ValueError:
                 logging.exeception("Error while cracking hashes ... ")
             self.saveResults(user, channel, results)
