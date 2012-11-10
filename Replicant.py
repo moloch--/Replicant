@@ -147,12 +147,11 @@ class Replicant(irc.IRCClient):
             cursor.execute("SELECT * FROM messages WHERE receiver_id = ?", (result[0],))
             messages = cursor.fetchall()
             for msg in messages:
-                if msg[6]: 
-                    continue
+                if msg[6]: continue # Msg[6] = Delievered
                 cursor.execute("SELECT user FROM users WHERE id = ?", (msg[3],))
                 sender = cursor.fetchone()
                 message = "Hello %s, %s left you a message; '%s'" % (user, sender[0], msg[5],)
-                self.display(user, channel, message.encode('ascii', 'ignore'), whisper=True)
+                self.display(user, channel, message, whisper=True)
                 cursor.execute("UPDATE messages SET delieverd = ?, recieved = ? WHERE id = ?", 
                     (True, str(datetime.now()), msg[0],))
         cursor.execute("UPDATE users SET last_login = ? WHERE user = ?", (str(datetime.now()), user,))
@@ -242,14 +241,6 @@ class Replicant(irc.IRCClient):
         else:
             self.display(user, channel, "%s: Found zero hashes in request" % user)
 
-    def crack(self, user, channel, msg):
-        hashes = self.splitMsg(msg)
-        hashes = filter(lambda hsh: len(hsh) == 32, hashes)
-        if 0 < len(hashes):
-            self.dispatch(user, channel, msg, hashes)
-        else:
-            self.display(user, channel, "%s: Found zero hashes in request" % user)
-
     def splitMsg(self, msg):
         ''' Splits message into a list of hashes, filters non-white list chars '''
         hashes = []
@@ -325,7 +316,7 @@ class Replicant(irc.IRCClient):
         cursor = dbConn.cursor()
         for key in results.keys():
             cursor.execute("INSERT INTO history VALUES (NULL, ?, ?, ?)", (user, key, results[key],))
-            self.display(user, channel, " %s -> %s" % (key, results[key],))
+            self.display(user, channel, "Cracked: %s -> %s" % (key, results[key],))
         dbConn.commit()
         dbConn.close()
 
@@ -368,7 +359,7 @@ class Replicant(irc.IRCClient):
         except ValueError:
             count = 5
         cursor = self.dbConn.cursor()
-        cursor.execute("SELECT * FROM history WHERE user = ? ORDER BY id DESC LIMIT ?", (user, count))
+        cursor.execute("SELECT * FROM history WHERE user = ? ORDER BY id DESC LIMIT ?", (user, count,))
         results = cursor.fetchall()
         if len(results) == 0:
             self.display(user, channel, "No history for %s" % user)
