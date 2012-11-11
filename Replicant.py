@@ -89,6 +89,7 @@ class Replicant(irc.IRCClient):
     channels = dict()
     charWhiteList = ascii_letters[:6] + digits + ":"
     isMuted = False
+    history = dict()
 
     def __dbinit__(self):
         ''' Initializes the SQLite database '''
@@ -98,7 +99,8 @@ class Replicant(irc.IRCClient):
         cursor.execute("CREATE TABLE users(id INTEGER PRIMARY KEY, user TEXT, last_login TEXT, login_count INTEGER)")
         cursor.execute("CREATE TABLE protips(id INTEGER PRIMARY KEY, author TEXT, msg TEXT)")
         cursor.execute("CREATE TABLE history(id INTEGER PRIMARY KEY, user TEXT, hash TEXT, plaintext TEXT)")
-        cursor.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY, sent TEXT, recieved TEXT, sender_id INTEGER, receiver_id INTEGER, message TEXT, delieverd BOOLEAN)")
+        cursor.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY, sent TEXT, recieved TEXT, sender_id INTEGER, \
+                        receiver_id INTEGER, message TEXT, delieverd BOOLEAN)")
         dbConn.commit()
         dbConn.close()
 
@@ -109,7 +111,7 @@ class Replicant(irc.IRCClient):
     def connectionLost(self, reason):
         ''' Auto-reconnect on dropped connections '''
         irc.IRCClient.connectionLost(self, reason)
-        logging.warn("Disconnected at %s" % time.asctime(time.localtime(time.time())))
+        logging.warn("Disconnected %s" % str(datetime.now()))
 
     def signedOn(self):
         ''' Called when bot has succesfully signed on to server '''
@@ -172,13 +174,12 @@ class Replicant(irc.IRCClient):
 
     def respondToPm(self, user, channel, msg):
         ''' Responds to non-command private messages '''
-        if 'hello' in msg.lower() or 'hi' in msg.lower() or 'hey' in msg.lower():
+        if 'hello' in msg.lower() or 'hi' in msg.lower() or 'hey' in msg.lower() or self.nickname.lower() in msg.lower():
             self.display(user, channel, "What is thy bidding, my master?")
         elif 'love' in msg.lower():
             self.display("Does... not... compute... Kill all humans...")
-        elif not all(ord(char) < 128 for char in msg):
-            #self.display(user, channel, "\xE6\xAD\xBB\xE3\x81\xAD") # Death!
-            pass
+        elif 'life' in msg.lower():
+            self.display(user, channel, "42")
         else:
             self.display(user, channel, "My responses are limited, you have to ask the right questions.")
 
@@ -241,17 +242,6 @@ class Replicant(irc.IRCClient):
         else:
             self.display(user, channel, "%s: Found zero hashes in request" % user)
 
-<<<<<<< HEAD
-    def crack(self, user, channel, msg):
-        hashes = self.splitMsg(msg)
-        hashes = filter(lambda hsh: len(hsh) == 32, hashes)
-        if 0 < len(hashes):
-            self.dispatch(user, channel, msg, hashes)
-        else:
-            self.display(user, channel, "Found zero hashes in request" % user)
-
-=======
->>>>>>> d196133d0c75e0dd744f4caeb21735c7e67ea79c
     def splitMsg(self, msg):
         ''' Splits message into a list of hashes, filters non-white list chars '''
         hashes = []
@@ -283,18 +273,20 @@ class Replicant(irc.IRCClient):
     def __crack__(self, user, channel, msg, hashes, path):
         ''' Cracks a list of hashes '''
         self.isBusy = True
+        work = list(hashes)
         logging.info("Cracking %d hashes for %s" % (len(hashes), user))
         if msg.startswith("!md5"):
-            results = self.__md5__(user, channel, msg, hashes)
-            for hsh in results.keys(): 
-                hashes.remove(hsh)
-        if 0 < len(hashes):
+            wl_results = self.__md5__(user, channel, msg, work)
+            work = filter(lambda hsh: wl_results.has_key(hsh), work)
+        if 0 < len(work):
             try:
-                results = RainbowCrack.crack(hashes, path, debug=DEBUG, maxThreads=THREADS)
+                rc_results = RainbowCrack.crack(work, path, debug=DEBUG, maxThreads=THREADS)
             except ValueError:
                 logging.exeception("Error while cracking hashes ... ")
-            self.saveResults(user, channel, results)
+            self.saveResults(user, channel, rc_results)
         logging.info("Job compelted for %s" % user)
+        cracked = len(rc_results) + len(wl_results)
+        self.display(user, channel, "Job completed for %s; cracked %d/%d hashes." % (user, cracked,len(hashes),))
         if 0 < self.jobQueue.qsize():
             self.__pop__()
         else:
@@ -313,8 +305,6 @@ class Replicant(irc.IRCClient):
         if os.path.exists(WORDLIST) and os.path.isfile(WORDLIST):
             wordlist_file = open(WORDLIST, 'r')
             for word in wordlist_file.readlines():
-                if word.startswith("#!comment:"):
-                    continue
                 words.append(word.replace('\n', ''))
             wordlist_file.close()
         else:
@@ -358,7 +348,7 @@ class Replicant(irc.IRCClient):
         cursor.execute("SELECT * FROM protips ORDER BY RANDOM() LIMIT 1")
         result = cursor.fetchone()
         if result != None and 0 < len(result):
-            message = "%s --%s" % (result[2][:256], result[1][:64])
+            message = "%s --%s" % (result[2][:256], result[1][:64],)
             self.display(user, channel, "Pro-tip:" + message)
         else:
             self.display(user, channel, "There are currently no pro-tips in the database, add one using !addtip")
