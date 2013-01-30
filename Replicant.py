@@ -6,6 +6,9 @@
 --------------------
 Replicant is an IRC bot that implements the RCrackPy interface
 to automatically crack passwords using rainbow tables.
+
+Everything is in one file for portability.
+
 '''
 
 import re
@@ -22,44 +25,12 @@ import RainbowCrack
 from random import randint
 from datetime import datetime
 from Queue import PriorityQueue
+from argparse import ArgumentParser
 from string import ascii_letters, digits
 from twisted.application import internet
 from twisted.words.protocols import irc
 from twisted.internet import reactor, protocol
 
-logging.basicConfig(format = '[%(levelname)s] %(asctime)s - %(message)s', level = logging.DEBUG)
-
-### Load configuration from file
-logging.info("Replicant IRC Bot Starting...")
-if len(sys.argv) < 2:
-    cfg_path = os.path.abspath("replicant.cfg")
-else:
-    cfg_path = sys.argv[1]
-if not (os.path.exists(cfg_path) and os.path.isfile(cfg_path)):
-    logging.error("No configuration file found at %s" % cfg_path)
-    os._exit(1)
-logging.info('Loading config from %s' % cfg_path)
-config = ConfigParser.SafeConfigParser()
-config.readfp(open(cfg_path, 'r'))
-LM_TABLES = config.get("RainbowTables", 'lm')
-logging.info('Config LM tables (%s)' % LM_TABLES)
-NTLM_TABLES = config.get("RainbowTables", 'ntlm')
-logging.info('Config NTLM tables (%s)' % NTLM_TABLES)
-MD5_TABLES = config.get("RainbowTables", 'md5')
-logging.info('Config MD5 tables (%s)' % MD5_TABLES)
-WORDLIST = config.get("Wordlist", 'path')
-logging.info('Config wordlist (%s)' % WORDLIST)
-HOST = config.get("Network", 'host')
-logging.info('Config network host (%s)' % HOST)
-PORT = config.getint("Network", 'port')
-logging.info('Config network port (%s)', str(PORT))
-NICKNAME = config.get("System", 'nickname')
-logging.info('Config system bot nickname (%s)' % NICKNAME)
-DEBUG = config.getboolean("System", 'debug')
-logging.info('Config system debug mode (%s)' % str(DEBUG))
-THREADS = config.getint("System", 'threads')
-logging.info('Config system thread count (%s)' % str(THREADS))
-CHANNELS = config.items("Channels")
 
 ### Channel
 class ChannelSettings(object):
@@ -83,13 +54,27 @@ class ChannelSettings(object):
 class Replicant(irc.IRCClient):
     
     jobQueue = PriorityQueue()
-    nickname = NICKNAME
+    nickname = "replicant"
     realname = "replicant"
     isBusy = False
-    channels = dict()
+    channels = {}
     charWhiteList = ascii_letters[:6] + digits + ":"
     isMuted = False
-    history = dict()
+    history = {}
+    defaults = {
+        'level': 'debug',
+        'lm': '.',
+        'ntlm': '.',
+        'md5': '.',
+        'path': '.',
+        'nickname': "replicant",
+        'realname': "replicant",
+        'debug': 'off',
+        'threads': '2',   
+    }
+    cmd_parser = ArgumentParser(
+        description="Password cracking IRC bot."
+    )
 
     def __dbinit__(self):
         ''' Initializes the SQLite database '''
@@ -103,6 +88,62 @@ class Replicant(irc.IRCClient):
                         receiver_id INTEGER, message TEXT, delieverd BOOLEAN)")
         dbConn.commit()
         dbConn.close()
+
+    def config(self, filename="replicant.cfg"):
+        ''' Load settings from config file '''
+        logging.info('Loading config from: %s' % filename)
+        config = ConfigParser.SafeConfigParser(self.defaults)
+        config.readfp(open(filename, 'r'))
+        self.__logging__(config)
+        self.__rainbowtables__(config)
+        self.__wordlist__(config)
+        self.__system__(config)
+        self.__channels__(filename)
+
+    def __logging__(self, config):
+        ''' Configure logging module '''
+        logLevel = config.get("Logging", 'level')
+        if logLevel.lower() == 'debug':
+            logging.getLogger().setLevel(logging.DEBUG)
+        elif logLevel.lower().startswith('warn'):
+            logging.getLogger().setLevel(logging.WARNING)
+        elif logLevel.lower() == 'error':
+            logging.getLogger().setLevel(logging.ERROR)
+        elif logLevel.lower() == 'critical':
+            logging.getLogger().setLevel(logging.CRITICAL)
+        else:
+            logging.getLogger().setLevel(logging.INFO)
+
+    def __rainbowtables__(self, config):
+        self.LM_TABLES = os.path.abspath(config.get("RainbowTables", 'lm'))
+        logging.info('Config LM tables (%s)' % self.LM_TABLES)
+        self.NTLM_TABLES = os.path.abspath(config.get("RainbowTables", 'ntlm'))
+        logging.info('Config NTLM tables (%s)' % self.NTLM_TABLES)
+        self.MD5_TABLES = os.path.abspath(config.get("RainbowTables", 'md5'))
+        logging.info('Config MD5 tables (%s)' % self.MD5_TABLES)
+
+    def __wordlist__(self, config):
+        self.WORDLIST = config.get("Wordlist", 'path')
+        if not os.path.exists(self.WORDLIST):
+            logging.warning("Wordlist file not found: '%s'" % self.WORDLIST)
+        logging.info('Config wordlist (%s)' % self.WORDLIST)
+
+    def __system__(self, config):
+        ''' Configure system settings '''
+        self.nickname = config.get("System", 'nickname')
+        logging.info('Config system bot nickname (%s)' % self.nickname)
+        self.realname = config.get("System", 'realname')
+        logging.info('Config system bot realname (%s)' % self.realname)
+        self.debug = config.getboolean("System", 'debug')
+        logging.info('Config system debug mode (%s)' % str(self.debug))
+        self.threads = config.getint("System", 'threads')
+        logging.info('Config system thread count (%d)' % self.threads)
+
+    def __channels__(self, filename):
+        ''' Read channels to join from config file '''
+        config = ConfigParser.SafeConfigParser()
+        config.readfp(open(filename, 'r'))
+        self.CHANNELS = config.items("Channels")
 
     def connectionMade(self):
         ''' When we make a succesful connection to a server '''
@@ -118,7 +159,9 @@ class Replicant(irc.IRCClient):
         if not os.path.exists("replicant.db"):
             self.__dbinit__()
         self.dbConn = sqlite3.connect("replicant.db")
-        for key_pair in CHANNELS:
+        if not 0 < len(self.CHANNELS):
+            logging.warn("No channels to join.")
+        for key_pair in self.CHANNELS:
             channel = ChannelSettings(key_pair[0], key_pair[1])
             self.channels[channel.name] = channel
             logging.info("Joined channel %s" % channel.name)
@@ -222,7 +265,7 @@ class Replicant(irc.IRCClient):
         hashes = self.splitMsg(msg[len("!md5"):])
         hashes = filter(lambda hsh: len(hsh) == 32, hashes)
         if 0 < len(hashes):
-            self.dispatch(user, channel, msg, hashes, MD5_TABLES)
+            self.dispatch(user, channel, msg, hashes, self.MD5_TABLES)
         else:
             self.display(user, channel, "%s: Found zero hashes in request" % user)
 
@@ -230,7 +273,7 @@ class Replicant(irc.IRCClient):
         ''' Gathers the ntlm hashes into a list '''
         hashes = self.splitMsg(msg[len("!ntlm"):])
         if 0 < len(hashes):
-            self.dispatch(user, channel, msg, hashes, NTLM_TABLES)
+            self.dispatch(user, channel, msg, hashes, self.NTLM_TABLES)
         else:
             self.display(user, channel, "%s: Found zero hashes in request" % user)
 
@@ -238,7 +281,7 @@ class Replicant(irc.IRCClient):
         ''' Gathers the ntlm hashes into a list '''
         hashes = self.splitMsg(msg[len("!lm"):])
         if 0 < len(hashes):
-            self.dispatch(user, channel, msg, hashes, LM_TABLES)
+            self.dispatch(user, channel, msg, hashes, self.LM_TABLES)
         else:
             self.display(user, channel, "%s: Found zero hashes in request" % user)
 
@@ -280,7 +323,7 @@ class Replicant(irc.IRCClient):
             work = filter(lambda hsh: wl_results.has_key(hsh), work)
         if 0 < len(work):
             try:
-                rc_results = RainbowCrack.crack(work, path, debug=DEBUG, maxThreads=THREADS)
+                rc_results = RainbowCrack.crack(work, path, debug=self.debug, maxThreads=self.threads)
             except ValueError:
                 logging.exeception("Error while cracking hashes ... ")
             self.saveResults(user, channel, rc_results)
@@ -295,20 +338,20 @@ class Replicant(irc.IRCClient):
     def __md5__(self, user, channel, msg, hashes):
         ''' Cracks md5 hashes using a word list '''
         words = self.__loadWordlist__()
-        results = CrackPy.md5(hashes, words, threads=THREADS, debug=DEBUG)
+        results = CrackPy.md5(hashes, words, threads=self.threads, debug=self.debug)
         self.saveResults(user, channel, results)
         return results
 
     def __loadWordlist__(self):
         ''' Load words from file '''
         words = []
-        if os.path.exists(WORDLIST) and os.path.isfile(WORDLIST):
-            wordlist_file = open(WORDLIST, 'r')
+        if os.path.exists(self.WORDLIST) and os.path.isfile(self.WORDLIST):
+            wordlist_file = open(self.WORDLIST, 'r')
             for word in wordlist_file.readlines():
                 words.append(word.replace('\n', ''))
             wordlist_file.close()
         else:
-            logging.error("Wordlist file does not exist '%s'" % WORDLIST)
+            logging.error("Wordlist file does not exist '%s'" % self.WORDLIST)
             words = ['password', 'love', 'sex', 'secret', 'god']
         return words
 
@@ -466,6 +509,8 @@ class ReplicantFactory(protocol.ClientFactory):
     def buildProtocol(self, addr):
         ''' Creates factory '''
         bot = Replicant()
+        bot.config(self.configFilename)
+        logging.info("Replicant IRC Bot Starting...")
         bot.factory = self
         return bot
 
@@ -480,9 +525,27 @@ class ReplicantFactory(protocol.ClientFactory):
 
 ### Main
 if __name__ == '__main__':
-    try:
-        factory = ReplicantFactory()
-        reactor.connectTCP(HOST, PORT, factory)
-        reactor.run()
-    except KeyboardInterrupt:
-        print '\r[*] User exit'
+    parser = ArgumentParser(
+        description="Password cracking IRC bot.")
+    parser.add_argument("server",
+        metavar="SERVER",
+        help="IRC server to connect to.")
+    parser.add_argument("-p", "--port",
+        type=int,
+        default=6667,
+        dest='port',
+        help="Port number to connect to.")
+    parser.add_argument("-c", "--config",
+        metavar="CONFIG",
+        default="replicant.cfg",
+        dest="configFilename",
+        help="Path to config file.")
+    args = parser.parse_args()
+    logging.basicConfig(
+        format = '\r\033[1m[%(levelname)s]\033[0m %(asctime)s - %(message)s', 
+        level=logging.INFO)
+    factory = ReplicantFactory()
+    factory.configFilename = args.configFilename
+    reactor.connectTCP(args.server, args.port, factory)
+    reactor.run()
+
