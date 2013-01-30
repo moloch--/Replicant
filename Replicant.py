@@ -72,9 +72,28 @@ class Replicant(irc.IRCClient):
         'debug': 'off',
         'threads': '2',   
     }
-    cmd_parser = ArgumentParser(
-        description="Password cracking IRC bot."
-    )
+
+    def initialize(self):
+        ''' 
+        Because twisted is fucking stupid and won't let you use super/init 
+        '''
+        self.commands = {
+            "!help": self.help,
+            "!mute": self.muteBot,
+            "!stfu": self.muteBot,
+            "!about": self.about,
+            "!protip": self.getProtip,
+            "!pro-tip": self.getProtip,
+            "!addtip": self.addProtip,
+            "!jobs": self.checkJobs,
+            "!status": self.checkStatus,
+            "!md5": self.md5,
+            "!ntlm": self.ntlm,
+            "!lm": self.lm,
+            "!history": self.getHistory,
+            "!send": self.sendMessage,
+            "!seen": self.seen,
+        }
 
     def __dbinit__(self):
         ''' Initializes the SQLite database '''
@@ -228,60 +247,35 @@ class Replicant(irc.IRCClient):
 
     def parseCommand(self, user, channel, msg):
         ''' Ugly parser for commands '''
-        try:
-            if msg.startswith("!help") or msg.startswith("?"):
-                self.help(user, channel, msg)
-            elif msg.startswith("!mute") or msg.startswith("!stfu"):
-                self.muteBot(user, channel, msg)
-            elif msg.startswith("!about"):
-                self.about(user, channel, msg)
-            elif msg.startswith("!protip") or msg.startswith("!pro-tip"):
-                self.getProtip(user, channel, msg)
-            elif msg.startswith("!addtip"):
-                self.addProtip(user, channel, msg[len("!addtip"):])
-            elif msg.startswith("!jobs"):
-                self.checkJobs(user, channel, msg)
-            elif msg.startswith("!status"):
-                self.checkStatus(user, channel, msg)
-            elif msg.startswith("!md5"):
-                self.md5(user, channel, msg)
-            elif msg.startswith("!ntlm"):
-                self.ntlm(user, channel, msg)
-            elif msg.startswith("!lm"):
-                self.lm(user, channel, msg)
-            elif msg.startswith("!history"):
-                self.getHistory(user, channel, msg)
-            elif msg.startswith("!send"):
-                self.sendMessage(user, channel, msg)
-            elif msg.startswith("!seen"):
-                self.seen(user, channel, msg[len("!seen"):])
-            else:
-                self.display(user, channel, "Not a command, see !help")
-        except ValueError:
-            self.display(user, channel, "Invalid hash, try again")
+        command = msg.split(" ")[0]
+        if command in self.commands:
+            msg = ''.join(msg.split(' ')[1:])
+            self.commands[command](user, channel, msg)
+        else:
+            self.display(user, channel, "Not a command, see !help")
 
     def md5(self, user, channel, msg):
         ''' Gathers the md5 hashes into a list '''
-        hashes = self.splitMsg(msg[len("!md5"):])
+        hashes = self.splitMsg(msg)
         hashes = filter(lambda hsh: len(hsh) == 32, hashes)
         if 0 < len(hashes):
-            self.dispatch(user, channel, msg, hashes, self.MD5_TABLES)
+            self.dispatch(user, channel, msg, hashes, self.MD5_TABLES, 'md5')
         else:
             self.display(user, channel, "%s: Found zero hashes in request" % user)
 
     def ntlm(self, user, channel, msg):
         ''' Gathers the ntlm hashes into a list '''
-        hashes = self.splitMsg(msg[len("!ntlm"):])
+        hashes = self.splitMsg(msg)
         if 0 < len(hashes):
-            self.dispatch(user, channel, msg, hashes, self.NTLM_TABLES)
+            self.dispatch(user, channel, msg, hashes, self.NTLM_TABLES, 'ntlm')
         else:
             self.display(user, channel, "%s: Found zero hashes in request" % user)
 
     def lm(self, user, channel, msg):
         ''' Gathers the ntlm hashes into a list '''
-        hashes = self.splitMsg(msg[len("!lm"):])
+        hashes = self.splitMsg(msg)
         if 0 < len(hashes):
-            self.dispatch(user, channel, msg, hashes, self.LM_TABLES)
+            self.dispatch(user, channel, msg, hashes, self.LM_TABLES, 'lm')
         else:
             self.display(user, channel, "%s: Found zero hashes in request" % user)
 
@@ -297,15 +291,17 @@ class Replicant(irc.IRCClient):
                 hashes.append(cleanHash)
         return hashes
 
-    def dispatch(self, user, channel, msg, hashes, path=None, priority=1):
+    def dispatch(self, user, channel, msg, hashes, path, algo, priority=1):
         ''' Starts cracking jobs, or pushes the job onto the queue '''
         if not self.isBusy:
             self.display(user, channel, "Starting new job for %s; cracking %d hash(es)" % (user, len(hashes),))
-            thread.start_new_thread(self.__crack__, (user, channel, msg, hashes, path,))
+            thread.start_new_thread(self.__crack__, (user, channel, msg, hashes, path, algo,))
         else:
             self.display(user, channel, "Queued job for %s with %d hash(es)" % (user, len(hashes),))
             logging.info("Job in progress, pushing to queue")
-            self.jobQueue.put((priority, (user, channel, msg, hashes, path),))
+            self.jobQueue.put(
+                (priority, (user, channel, msg, hashes, path, algo,),)
+            )
 
     def __pop__(self):
         ''' Pops a job off the queue '''
@@ -313,33 +309,47 @@ class Replicant(irc.IRCClient):
         logging.info("Popping job off queue, %d job(s) remain " % self.jobQueue.qsize())
         thread.start_new_thread(self.__crack__, job[1])
 
-    def __crack__(self, user, channel, msg, hashes, path):
+    def __crack__(self, user, channel, msg, hashes, path, algo):
         ''' Cracks a list of hashes '''
         self.isBusy = True
         work = list(hashes)
         logging.info("Cracking %d hashes for %s" % (len(hashes), user))
-        if msg.startswith("!md5"):
-            wl_results = self.__md5__(user, channel, msg, work)
-            work = filter(lambda hsh: wl_results.has_key(hsh), work)
+        cracked_count = 0
+        wlResults = self.__brute__(user, channel, msg, work, algo)
+        cracked_count = len(wlResults)
+        self.saveResults(user, channel, wlResults)
+        work = filter(lambda hsh: hsh not in wlResults, work)
         if 0 < len(work):
             try:
-                rc_results = RainbowCrack.crack(work, path, debug=self.debug, maxThreads=self.threads)
+                rcResults = RainbowCrack.crack(work, path, debug=self.debug, maxThreads=self.threads)
+                rcResults = filter(lambda hsh: hsh != '<Not Found>', rcResults)
+                self.saveResults(user, channel, rcResults)
+                cracked_count += len(rcResults)
             except ValueError:
                 logging.exeception("Error while cracking hashes ... ")
-            self.saveResults(user, channel, rc_results)
         logging.info("Job compelted for %s" % user)
-        cracked = len(rc_results) + len(wl_results)
-        self.display(user, channel, "Job completed for %s; cracked %d/%d hashes." % (user, cracked,len(hashes),))
+        self.display(user, channel, "Job completed for %s; cracked %d of %d hashes." % (
+            user, cracked_count, len(hashes),
+        ))
+        self.__next__()
+
+    def __next__(self):
         if 0 < self.jobQueue.qsize():
             self.__pop__()
         else:
             self.isBusy = False
 
+    def __brute__(self, user, channel, msg, work, algo):
+        if algo == 'md5':
+            logging.debug('Worldlist available, starting bruteforce check')
+            return self.__md5__(user, channel, msg, work)
+        else:
+            return {}
+
     def __md5__(self, user, channel, msg, hashes):
         ''' Cracks md5 hashes using a word list '''
         words = self.__loadWordlist__()
         results = CrackPy.md5(hashes, words, threads=self.threads, debug=self.debug)
-        self.saveResults(user, channel, results)
         return results
 
     def __loadWordlist__(self):
@@ -356,9 +366,10 @@ class Replicant(irc.IRCClient):
         return words
 
     def saveResults(self, user, channel, results):
+        ''' Save results in database and send to user '''
         dbConn = sqlite3.connect("replicant.db")
         cursor = dbConn.cursor()
-        for key in results.keys():
+        for key in results:
             cursor.execute("INSERT INTO history VALUES (NULL, ?, ?, ?)", (user, key, results[key],))
             self.display(user, channel, "Cracked: %s -> %s" % (key, results[key],))
         dbConn.commit()
@@ -399,7 +410,7 @@ class Replicant(irc.IRCClient):
     def getHistory(self, user, channel, msg):
         ''' Retreives previously cracked passwords from the db '''
         try:
-            count = int(msg[len("!history"):])
+            count = abs(int(msg))
         except ValueError:
             count = 5
         cursor = self.dbConn.cursor()
@@ -492,7 +503,7 @@ class Replicant(irc.IRCClient):
         self.display(user, channel, " !ntlm <hash1,hash2> - Crack an NTLM hashes", whisper=True)
         self.display(user, channel, " !lm <hash1,hash2> - Crack an LM hashes", whisper=True)
         self.display(user, channel, " !help (all) - Display this helpful message", whisper=True)
-        if msg.lower() == '!help all':
+        if msg.lower() == 'all':
             self.display(user, channel, " !mute - Send all responses via pm", whisper=True)
             self.display(user, channel, " !status - Checks if the bot is busy", whisper=True)
             self.display(user, channel, " !jobs - Display the current queue size", whisper=True)
@@ -509,6 +520,7 @@ class ReplicantFactory(protocol.ClientFactory):
     def buildProtocol(self, addr):
         ''' Creates factory '''
         bot = Replicant()
+        bot.initialize()
         bot.config(self.configFilename)
         logging.info("Replicant IRC Bot Starting...")
         bot.factory = self
