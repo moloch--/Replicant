@@ -2,7 +2,7 @@
 '''
 @author: Moloch
 @copyright: GPLv3
-@version: 0.2
+@version: 0.3
 --------------------
 Replicant is an IRC bot that implements the RCrackPy interface
 to automatically crack passwords using rainbow tables.
@@ -22,6 +22,7 @@ import CrackPy
 import ConfigParser
 import RainbowCrack
 
+from hashlib import sha256
 from random import randint
 from datetime import datetime
 from Queue import PriorityQueue
@@ -37,21 +38,27 @@ class ChannelSettings(object):
 
     isMuted = False
 
-    def __init__(self, name, password):
-        if name[0] == '&':
+    def __init__(self, name, password=None, ignore=False):
+        if name[0] == '&' or ignore:
             self.name = name
-        else:
+        else: 
             self.name = "#" + name
-        if password.lower() == '__none__':
+        if password is None or password.lower() == '__none__':
             self.password = None
         else:
             self.password = password
+
+    def __eq__(self, other):
+        return self.name == str(other)
 
     def __str__(self):
         return self.name
 
 ### Bot
 class Replicant(irc.IRCClient):
+    '''
+    IRC Bot
+    '''
     
     jobQueue = PriorityQueue()
     nickname = "replicant"
@@ -66,18 +73,19 @@ class Replicant(irc.IRCClient):
         'lm': '.',
         'ntlm': '.',
         'md5': '.',
-        'path': '.',
+        'wordlist_path': '.',
         'nickname': "replicant",
         'realname': "replicant",
         'debug': 'off',
-        'threads': '2',   
+        'threads': '2',
+        'admin_sha256': '',
     }
 
     def initialize(self):
         ''' 
         Because twisted is fucking stupid and won't let you use super/init 
         '''
-        self.commands = {
+        self.public_commands = {
             "!help": self.help,
             "!mute": self.muteBot,
             "!stfu": self.muteBot,
@@ -93,6 +101,13 @@ class Replicant(irc.IRCClient):
             "!history": self.getHistory,
             "!send": self.sendMessage,
             "!seen": self.seen,
+        }
+        self.admin_commands = {
+            "!speak": self.speak,
+            "!leave": self.leaveChannel,
+            "!leaveall": self.leaveAll,
+            "!join": self.joinChannel,
+            "!exit": self.exit,
         }
 
     def __dbinit__(self):
@@ -142,7 +157,7 @@ class Replicant(irc.IRCClient):
         logging.info('Config MD5 tables (%s)' % self.MD5_TABLES)
 
     def __wordlist__(self, config):
-        self.WORDLIST = config.get("Wordlist", 'path')
+        self.WORDLIST = config.get("Wordlist", 'wordlist_path')
         if not os.path.exists(self.WORDLIST):
             logging.warning("Wordlist file not found: '%s'" % self.WORDLIST)
         logging.info('Config wordlist (%s)' % self.WORDLIST)
@@ -157,6 +172,7 @@ class Replicant(irc.IRCClient):
         logging.info('Config system debug mode (%s)' % str(self.debug))
         self.threads = config.getint("System", 'threads')
         logging.info('Config system thread count (%d)' % self.threads)
+        self.admin_hash = config.get("System", 'admin_sha256').replace(' ', '')
 
     def __channels__(self, filename):
         ''' Read channels to join from config file '''
@@ -179,11 +195,10 @@ class Replicant(irc.IRCClient):
             self.__dbinit__()
         self.dbConn = sqlite3.connect("replicant.db")
         if not 0 < len(self.CHANNELS):
-            logging.warn("No channels to join.")
+            logging.warning("No channels to join.")
         for key_pair in self.CHANNELS:
             channel = ChannelSettings(key_pair[0], key_pair[1])
             self.channels[channel.name] = channel
-            logging.info("Joined channel %s" % channel.name)
             if channel.password is None:
                 self.join(channel.name)
             else:
@@ -191,6 +206,7 @@ class Replicant(irc.IRCClient):
 
     def joined(self, channel):
         ''' Called when the bot joins the channel '''
+        logging.info("Joined channel %s" % channel)
         self.display(self.nickname, channel, "My name is %s, I have come to destroy you." % self.nickname)
 
     def alterCollidedNick(self, nickname):
@@ -232,25 +248,23 @@ class Replicant(irc.IRCClient):
             self.parseCommand(user, channel, msg)
         else:
             logging.debug("[Message]: <User: %s> <Channel: %s> <Msg: %s>" % (user, channel, msg))
-            if user == channel: self.respondToPm(user, channel, msg)
-
-    def respondToPm(self, user, channel, msg):
-        ''' Responds to non-command private messages '''
-        if 'hello' in msg.lower() or 'hi' in msg.lower() or 'hey' in msg.lower() or self.nickname.lower() in msg.lower():
-            self.display(user, channel, "What is thy bidding, my master?")
-        elif 'love' in msg.lower():
-            self.display("Does... not... compute... Kill all humans...")
-        elif 'life' in msg.lower():
-            self.display(user, channel, "42")
-        else:
-            self.display(user, channel, "My responses are limited, you have to ask the right questions.")
 
     def parseCommand(self, user, channel, msg):
-        ''' Ugly parser for commands '''
+        ''' Parse command, call functions '''
         command = msg.split(" ")[0]
-        if command in self.commands:
-            msg = ''.join(msg.split(' ')[1:])
-            self.commands[command](user, channel, msg)
+        msg = ' '.join(msg.split(' ')[1:])
+        if command in self.public_commands:
+            self.public_commands[command](user, channel, msg)
+        elif command in self.admin_commands and user == channel:
+            password = msg.split(" ")[0]
+            msg = ' '.join(msg.split(' ')[1:])
+            sha = sha256()
+            sha.update(password)
+            if sha.hexdigest() == self.admin_hash:
+                self.admin_commands[command](user, channel, msg)
+            else:
+                logging.debug("Failed authentication request from %s" % user) 
+                self.display(user, channel, "Wrong password")
         else:
             self.display(user, channel, "Not a command, see !help")
 
@@ -303,12 +317,6 @@ class Replicant(irc.IRCClient):
                 (priority, (user, channel, msg, hashes, path, algo,),)
             )
 
-    def __pop__(self):
-        ''' Pops a job off the queue '''
-        job = self.jobQueue.get()
-        logging.info("Popping job off queue, %d job(s) remain " % self.jobQueue.qsize())
-        thread.start_new_thread(self.__crack__, job[1])
-
     def __crack__(self, user, channel, msg, hashes, path, algo):
         ''' Cracks a list of hashes '''
         self.isBusy = True
@@ -320,36 +328,36 @@ class Replicant(irc.IRCClient):
         self.saveResults(user, channel, wlResults)
         work = filter(lambda hsh: hsh not in wlResults, work)
         if 0 < len(work):
-            try:
-                rcResults = RainbowCrack.crack(work, path, debug=self.debug, maxThreads=self.threads)
-                rcResults = filter(lambda hsh: hsh != '<Not Found>', rcResults)
-                self.saveResults(user, channel, rcResults)
-                cracked_count += len(rcResults)
-            except ValueError:
-                logging.exeception("Error while cracking hashes ... ")
+            rcResults = self.__rcrack__(user, channel, msg, work, algo)
+            cracked_count += len(rcResults)
         logging.info("Job compelted for %s" % user)
         self.display(user, channel, "Job completed for %s; cracked %d of %d hashes." % (
-            user, cracked_count, len(hashes),
-        ))
+            user, cracked_count, len(hashes),))
         self.__next__()
 
     def __next__(self):
+        ''' Pop the next job off the queue or stop cracking '''
         if 0 < self.jobQueue.qsize():
-            self.__pop__()
+            job = self.jobQueue.get()
+            logging.info("Popping job off queue, %d job(s) remain " % self.jobQueue.qsize())
+            thread.start_new_thread(self.__crack__, job[1])
         else:
             self.isBusy = False
 
     def __brute__(self, user, channel, msg, work, algo):
+        ''' Calls wordlist cracking function for an algo if one is available '''
         if algo == 'md5':
             logging.debug('Worldlist available, starting bruteforce check')
-            return self.__md5__(user, channel, msg, work)
+            return self.__md5__(user, channel, msg, work, algo)
         else:
-            return {}
+            return {}  # Bruteforce not available for this algo
 
-    def __md5__(self, user, channel, msg, hashes):
-        ''' Cracks md5 hashes using a word list '''
+    def __md5__(self, user, channel, msg, work, algo):
+        ''' Cracks md5 hashes using a wordlist '''
         words = self.__loadWordlist__()
-        results = CrackPy.md5(hashes, words, threads=self.threads, debug=self.debug)
+        self.display(user, channel, "Cracking %d %s hash(es) with %d word(s)" % (
+            len(work), algo, len(words),))
+        results = CrackPy.md5(work, words, threads=self.threads, debug=self.debug)
         return results
 
     def __loadWordlist__(self):
@@ -364,6 +372,19 @@ class Replicant(irc.IRCClient):
             logging.error("Wordlist file does not exist '%s'" % self.WORDLIST)
             words = ['password', 'love', 'sex', 'secret', 'god']
         return words
+
+    def __rcrack__(self, user, channel, msg, work, algo):
+        self.display(user, channel, "Cracking %d %s hash(es) with rainbow tables" % (
+            len(work), algo,))
+        rcResults = {}
+        try:
+            rcResults = RainbowCrack.crack(work, path, debug=self.debug, maxThreads=self.threads)
+            rcResults = filter(lambda hsh: hsh != '<Not Found>', rcResults)
+            self.saveResults(user, channel, rcResults)
+        except ValueError:
+            logging.exeception("Error while cracking hashes ... ")
+        finally:
+            return rcResults
 
     def saveResults(self, user, channel, results):
         ''' Save results in database and send to user '''
@@ -474,23 +495,50 @@ class Replicant(irc.IRCClient):
 
     def display(self, user, channel, message, whisper=False):
         ''' Intelligently wraps msg, based on mute setting '''
-        channel_settings = self.channels.get(channel, None)
-        if whisper or (channel_settings is not None and channel_settings.isMuted):
-            display_channel = user
+        channelSettings = self.channels.get(channel, None)
+        if whisper or (channelSettings is not None and channelSettings.isMuted):
+            displayChannel = user
         else:
-            display_channel = channel
-        self.msg(display_channel, message.encode('ascii', 'ignore'))
+            displayChannel = channel
+        self.msg(displayChannel, message.encode('ascii', 'ignore'))
 
-    def leave_all(self):
-        ''' Leave all channels '''
+    def joinChannel(self, user, channel, msg):
+        ''' Admin command to get bot to join channel '''
+        joinChan = msg.split(" ")
+        if len(joinChan) < 2: joinChan.append(None)
+        channel = ChannelSettings(joinChan[0], joinChan[1])
+        self.channels[channel.name] = channel
+        if channel.password is None:
+            self.join(channel.name)
+        else:
+            self.join(channel.name, channel.password)
+        logging.info("Joined channel %s" % channel.name)
+
+    def speak(self, user, channel, msg):
+        ''' Admin command to make bot speak in a given channel '''
+        speakChannel = msg.split(" ")[0]
+        msg = ' '.join(msg.split(' ')[1:])
+        self.msg(speakChannel, msg.encode('ascii', 'ignore'))
+
+    def leaveChannel(self, user, channel, msg):
+        ''' Admin command to leave a channel '''
+        logging.info("Leaving channel: %s", msg)
+        self.leave(msg, reason="I'll be back...")
+
+    def leaveAll(self):
+        ''' Admin command to leave all channels '''
         for channel in self.channels:
             logging.info("Leaving channel:", channel.name)
             self.leave(channel.name, reason="I'll be back...")
 
+    def exit(self):
+        ''' Admin command to exit bot program '''
+        os._exit(0)
+
     def about(self, user, channel, msg):
         ''' Displays version information '''
         self.display(user, channel, "  +---------------------------------------+")
-        self.display(user, channel, "  |  Replicant IRC Bot v0.2 - By Moloch   |")
+        self.display(user, channel, "  |  Replicant IRC Bot v0.3 - By Moloch   |")
         self.display(user, channel, "  |      RCrackPy v0.1 // SQLite v3       |")
         self.display(user, channel, "  +---------------------------------------+")
         self.display(user, channel, "    https://github.com/moloch--/Replicant  ")
@@ -511,7 +559,7 @@ class Replicant(irc.IRCClient):
             self.display(user, channel, " !addtip <tip> - Add a new pro-tip", whisper=True)
             self.display(user, channel, " !protip - Get a hacker pro-tip", whisper=True)
             self.display(user, channel, " !send - Send an offline user a message", whisper=True)
-            self.display(user, channel, " !seen <user> - Display when a user was last seen.", whisper=True)
+            self.display(user, channel, " !seen <user> - Display the last time a user joined the channel.", whisper=True)
             self.display(user, channel, " !about - View version information", whisper=True)
 
 ### Factory
