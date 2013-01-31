@@ -149,6 +149,7 @@ class Replicant(irc.IRCClient):
             logging.getLogger().setLevel(logging.INFO)
 
     def __rainbowtables__(self, config):
+        ''' Load paths to rainbow tables '''
         self.LM_TABLES = os.path.abspath(config.get("RainbowTables", 'lm'))
         logging.info('Config LM tables (%s)' % self.LM_TABLES)
         self.NTLM_TABLES = os.path.abspath(config.get("RainbowTables", 'ntlm'))
@@ -157,6 +158,7 @@ class Replicant(irc.IRCClient):
         logging.info('Config MD5 tables (%s)' % self.MD5_TABLES)
 
     def __wordlist__(self, config):
+        ''' Load path to wordlist '''
         self.WORDLIST = config.get("Wordlist", 'wordlist_path')
         if not os.path.exists(self.WORDLIST):
             logging.warning("Wordlist file not found: '%s'" % self.WORDLIST)
@@ -211,6 +213,7 @@ class Replicant(irc.IRCClient):
 
     def alterCollidedNick(self, nickname):
         ''' Avoids name collisions '''
+        logging.info("Nickname collision; chaned to: " + nickname + '^')
         return nickname + '^'
 
     def userJoined(self, user, channel):
@@ -244,7 +247,6 @@ class Replicant(irc.IRCClient):
             logging.debug("Private message received; response channel is '%s'" % (user,))
             channel = user
         if msg.startswith("!"):
-            logging.debug("[Command]: <User: %s> <Channel: %s> <Msg: %s>" % (user, channel, msg))
             self.parseCommand(user, channel, msg)
         else:
             logging.debug("[Message]: <User: %s> <Channel: %s> <Msg: %s>" % (user, channel, msg))
@@ -254,6 +256,7 @@ class Replicant(irc.IRCClient):
         command = msg.split(" ")[0]
         msg = ' '.join(msg.split(' ')[1:])
         if command in self.public_commands:
+            logging.debug("[Command]: <User: %s> <Channel: %s> <Msg: %s>" % (user, channel, msg))
             self.public_commands[command](user, channel, msg)
         elif command in self.admin_commands and user == channel:
             password = msg.split(" ")[0]
@@ -374,6 +377,7 @@ class Replicant(irc.IRCClient):
         return words
 
     def __rcrack__(self, user, channel, msg, work, algo):
+        ''' Call RainbowCrack via RCrackPy '''
         self.display(user, channel, "Cracking %d %s hash(es) with rainbow tables" % (
             len(work), algo,))
         rcResults = {}
@@ -585,27 +589,37 @@ class ReplicantFactory(protocol.ClientFactory):
 
 ### Main
 if __name__ == '__main__':
-    parser = ArgumentParser(
-        description="Password cracking IRC bot.")
-    parser.add_argument("server",
-        metavar="SERVER",
-        help="IRC server to connect to.")
-    parser.add_argument("-p", "--port",
-        type=int,
-        default=6667,
-        dest='port',
-        help="Port number to connect to.")
-    parser.add_argument("-c", "--config",
-        metavar="CONFIG",
-        default="replicant.cfg",
-        dest="configFilename",
-        help="Path to config file.")
-    args = parser.parse_args()
     logging.basicConfig(
         format = '\r\033[1m[%(levelname)s]\033[0m %(asctime)s - %(message)s', 
         level=logging.INFO)
     factory = ReplicantFactory()
-    factory.configFilename = args.configFilename
-    reactor.connectTCP(args.server, args.port, factory)
+    if 1 < len(sys.argv):
+        parser = ArgumentParser(
+            description="Password cracking IRC bot.")
+        parser.add_argument("server",
+            metavar="SERVER",
+            help="IRC server to connect to.")
+        parser.add_argument("-p", "--port",
+            type=int,
+            default=6667,
+            dest='port',
+            help="Port number to connect to.")
+        parser.add_argument("-c", "--config",
+            metavar="CONFIG",
+            default="replicant.cfg",
+            dest="configFilename",
+            help="Path to config file.")
+        args = parser.parse_args()   
+        factory.configFilename = args.configFilename
+        reactor.connectTCP(args.server, args.port, factory)
+    elif os.path.exists("replicant.cfg"):
+        config = ConfigParser.SafeConfigParser({'port': '6667'})
+        config.readfp(open("replicant.cfg", 'r'))
+        factory.configFilename = "replicant.cfg"
+        server = config.get("Server", 'domain')
+        port = config.getint("Server", 'port')
+        reactor.connectTCP(server, port, factory)
+    else:
+        print 'No config file or args; see --help'
+        os._exit(1)
     reactor.run()
-
