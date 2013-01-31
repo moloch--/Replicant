@@ -51,6 +51,9 @@ class ChannelSettings(object):
     def __eq__(self, other):
         return self.name == str(other)
 
+    def __ne__(self, other):
+        return not self == other
+
     def __str__(self):
         return self.name
 
@@ -180,7 +183,7 @@ class Replicant(irc.IRCClient):
         ''' Read channels to join from config file '''
         config = ConfigParser.SafeConfigParser()
         config.readfp(open(filename, 'r'))
-        self.CHANNELS = config.items("Channels")
+        self.channel_pairs = config.items("Channels")
 
     def connectionMade(self):
         ''' When we make a succesful connection to a server '''
@@ -196,9 +199,9 @@ class Replicant(irc.IRCClient):
         if not os.path.exists("replicant.db"):
             self.__dbinit__()
         self.dbConn = sqlite3.connect("replicant.db")
-        if not 0 < len(self.CHANNELS):
+        if not 0 < len(self.channel_pairs):
             logging.warning("No channels to join.")
-        for key_pair in self.CHANNELS:
+        for key_pair in self.channel_pairs:
             channel = ChannelSettings(key_pair[0], key_pair[1])
             self.channels[channel.name] = channel
             if channel.password is None:
@@ -520,30 +523,38 @@ class Replicant(irc.IRCClient):
 
     def speak(self, user, channel, msg):
         ''' Admin command to make bot speak in a given channel '''
-        speakChannel = msg.split(" ")[0]
-        msg = ' '.join(msg.split(' ')[1:])
-        self.msg(speakChannel, msg.encode('ascii', 'ignore'))
+        if 2 <= len(msg.split(" ")):
+            speakChannel = msg.split(" ")[0]
+            msg = ' '.join(msg.split(' ')[1:])
+            self.display(user, channel, "Sending message '%s' to channel %s " % (
+                msg, speakChannel,))
+            self.msg(speakChannel, msg.encode('ascii', 'ignore'))
+        else:
+            self.display(user, channel, 
+                "Malformed command: !speak <admin password> <channel> <msg>")
 
     def leaveChannel(self, user, channel, msg):
         ''' Admin command to leave a channel '''
         logging.info("Leaving channel: %s", msg)
         self.leave(msg, reason="I'll be back...")
 
-    def leaveAll(self):
+    def leaveAll(self, user, channel, msg):
         ''' Admin command to leave all channels '''
-        for channel in self.channels:
-            logging.info("Leaving channel:", channel.name)
-            self.leave(channel.name, reason="I'll be back...")
+        for channelName in self.channels:
+            self.leaveChannel(user, channel, channelName)
 
-    def exit(self):
-        ''' Admin command to exit bot program '''
+    def exit(self, user, channel, msg):
+        ''' Admin command to gracefully exit bot program '''
+        logging.info("Admin exit requested by %s" % user)
+        self.leaveAll(user, channel, '')
+        self.quit()
         os._exit(0)
 
     def about(self, user, channel, msg):
         ''' Displays version information '''
         self.display(user, channel, "  +---------------------------------------+")
         self.display(user, channel, "  |  Replicant IRC Bot v0.3 - By Moloch   |")
-        self.display(user, channel, "  |      RCrackPy v0.1 // SQLite v3       |")
+        self.display(user, channel, "  |     RCrackPy v0.1 // CrackPy v0.1     |")
         self.display(user, channel, "  +---------------------------------------+")
         self.display(user, channel, "    https://github.com/moloch--/Replicant  ")
 
@@ -568,6 +579,9 @@ class Replicant(irc.IRCClient):
 
 ### Factory
 class ReplicantFactory(protocol.ClientFactory):
+    '''
+    Twisted IRC bot factory
+    '''
 
     def buildProtocol(self, addr):
         ''' Creates factory '''
