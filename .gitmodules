@@ -1,9 +1,9 @@
-[submodule "CrackPy"]
-	path = plugins/modules/CrackPy
-	url = https://github.com/moloch--/CrackPy
-[submodule "RCrackPy"]
-	path = plugins/modules/RCrackPy
-	url = https://github.com/moloch--/RCrackPy
 [submodule "plugins/modules/hashlookup"]
 	path = plugins/modules/hashlookup
 	url = https://github.com/moloch--/hashlookup
+[submodule "plugins/modules/CrackPy"]
+	path = plugins/modules/CrackPy
+	url = https://github.com/moloch--/CrackPy
+[submodule "plugins/modules/RCrackPy"]
+	path = plugins/modules/RCrackPy
+	url = https://github.com/moloch--/RCrackPy
