@@ -16,7 +16,6 @@ from models.BaseObject import BaseObject
 class PasswordHash(BaseObject):
 
     digest = Column(String(32), nullable=False)
-    username = Column(String(32))
     preimage = Column(String(32))
 
     @classmethod

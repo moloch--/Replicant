@@ -15,12 +15,10 @@ from models.BaseObject import BaseObject
 
 class Job(BaseObject):
 
-    user_id = Column()
-    name = Column(String(32), nullable=False)
     algorithm = Column(String(32), nullable=False)
     hashes = relationship("PasswordHash",
         backref=backref("Job", lazy="select"),
-        cascade="all, delete-orphan"
+        cascade="all,delete,delete-orphan"
     )
     is_completed = Column(Boolean, defalut=False)
 
