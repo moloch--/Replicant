@@ -3,6 +3,9 @@
 # RCrack files
 rcracki.*
 
+# log files
+*.log
+
 # SQLite Db
 *.db
 
