@@ -1,7 +1,8 @@
-class BasePlugin(object):
+class Plugin(object):
 
     name = "BasePlugin"
-    description = "Plugins should implement this interface"
+    cmd = "base"
+    help = "A helpful message about the plugin"
 
     def algorithms(self):
         ''' The algorithms this plugin can crack '''

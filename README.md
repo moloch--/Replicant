@@ -6,7 +6,8 @@ Replicant is a multi-threaded password cracking IRC bot.  It can crack MD5, NTLM
 Requirements
 =================
 * Python 2.6.x - 2.7.x
-* Requires python-twisted
+* Twisted
+* Gevent (libevent)
 
 Usage
 ======
@@ -18,21 +19,10 @@ Usage
 
 Commands
 ==========
-!md5 <hash>  - Crack an Md5 hash
-
-!ntlm <hash> - Crack an NTLM hash
-
-!lm <hash>   - Crack an LM hash
-
-!status      - Checks if the bot is busy
 
 !jobs        - Display the queue size
 
 !history     - Display your history
-
-!addtip      - Add a new pro-tip
-
-!protip      - Get a hacker pro-tip
 
 !about       - Version information
 
